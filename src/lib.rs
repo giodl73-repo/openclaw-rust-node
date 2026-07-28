@@ -1,0 +1,38 @@
+//! Experimental conformance boundary for the `OpenClaw` node contract.
+//!
+//! This crate is deliberately not a node client. It pins an immutable
+//! published protocol artifact, records which node-facing contracts that
+//! artifact actually publishes, and validates a small set of wire fixtures.
+
+mod manifest;
+mod wire;
+
+pub use manifest::{
+    ContractEntry, ContractStatus, NodeContractManifest, ProtocolPin, load_manifest, load_pin,
+};
+pub use wire::{FixtureError, validate_fixture};
+
+use sha2::{Digest, Sha512};
+use std::{fmt::Write as _, fs, path::Path};
+
+/// Verify the SHA-512 digest of a downloaded npm tarball against the immutable
+/// hexadecimal digest recorded in the protocol pin.
+/// # Errors
+///
+/// Returns an I/O error when the tarball cannot be read, or the expected and
+/// actual digest when integrity verification fails.
+pub fn verify_tarball_sha512(path: &Path, expected_hex: &str) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let digest = Sha512::digest(bytes);
+    let mut actual = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut actual, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    if actual == expected_hex {
+        Ok(())
+    } else {
+        Err(format!(
+            "SHA-512 mismatch: expected {expected_hex}, got {actual}"
+        ))
+    }
+}

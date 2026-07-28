@@ -1,0 +1,11 @@
+{
+  "type": "req",
+  "id": "rpc-1",
+  "method": "node.invoke.result",
+  "params": {
+    "id": "invoke-1",
+    "nodeId": "node-1",
+    "ok": true,
+    "payload": { "status": "ok" }
+  }
+}

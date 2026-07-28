@@ -74,6 +74,22 @@ records accepted findings and current-source verification.
 5. Stop for a cost and ownership review before streaming invocation, packaging,
    built-in commands, or adopter-specific work.
 
+## Conformance scaffold
+
+The experimental `openclaw-node-contract` crate pins the first published
+Gateway protocol beta and records its actual node-facing coverage in
+[`protocol/node-contract.json`](protocol/node-contract.json). It is a drift and
+fixture harness, not a working node client.
+
+The current immutable pin is deliberately marked `releaseReady: false` because
+the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
+and the pinned beta does not publish every required node event payload.
+
+Run `bash scripts/verify-protocol-pin.sh` to download the pinned npm tarball,
+verify its SHA-512 digest, and confirm its version, schema identity, definition
+count, and protocol-level constants. Vendoring the complete schema remains an
+R1 exit requirement once a stable package artifact is available.
+
 ## License
 
 [MIT](LICENSE)
