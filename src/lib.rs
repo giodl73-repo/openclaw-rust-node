@@ -6,6 +6,7 @@
 mod client;
 mod identity;
 mod manifest;
+mod reconnect;
 mod wire;
 
 pub use client::{
@@ -15,6 +16,10 @@ pub use client::{
 pub use identity::{IdentityError, NodeIdentity};
 pub use manifest::{
     ContractEntry, ContractStatus, NodeContractManifest, ProtocolPin, load_manifest, load_pin,
+};
+pub use reconnect::{
+    DevicePairingReason, DevicePairingRequest, ReconnectAction, ReconnectPause, ReconnectPolicy,
+    RecoveryStep, StoredDeviceTokenRetry,
 };
 pub use wire::{FixtureError, validate_fixture};
 

@@ -124,7 +124,13 @@ async fn gateway_connect_rejection_is_structured() {
                 "type":"res",
                 "id":connect["id"],
                 "ok":false,
-                "error":{"code":"PAIRING_REQUIRED","message":"approve this device","details":{"requestId":"pair-1"}}
+                "error":{
+                    "code":"NOT_PAIRED",
+                    "message":"pairing required: device approval is required",
+                    "details":{"code":"PAIRING_REQUIRED","reason":"not-paired","requestId":"pair-1"},
+                    "retryable":false,
+                    "retryAfterMs":1250
+                }
             }),
         )
         .await;
@@ -143,8 +149,10 @@ async fn gateway_connect_rejection_is_structured() {
         ClientError::Gateway {
             code,
             details: Some(_),
+            retryable: Some(false),
+            retry_after_ms: Some(1250),
             ..
-        } if code == "PAIRING_REQUIRED"
+        } if code == "NOT_PAIRED"
     ));
     server.await.unwrap();
 }

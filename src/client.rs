@@ -361,6 +361,8 @@ pub enum ClientError {
         code: String,
         message: String,
         details: Option<Value>,
+        retryable: Option<bool>,
+        retry_after_ms: Option<u64>,
     },
     #[error("Gateway request timed out: {0}")]
     RequestTimeout(String),
@@ -602,6 +604,10 @@ struct GatewayErrorShape {
     message: String,
     #[serde(default)]
     details: Option<Value>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default, rename = "retryAfterMs")]
+    retry_after_ms: Option<u64>,
 }
 
 async fn wait_for_challenge<S>(
@@ -774,6 +780,8 @@ fn response_result(
         code: "UNKNOWN".into(),
         message: "Gateway rejected the request".into(),
         details: None,
+        retryable: None,
+        retry_after_ms: None,
     });
     if error.code.is_empty() {
         error.code = "UNKNOWN".into();
@@ -786,6 +794,8 @@ fn response_result(
         code: error.code,
         message: error.message,
         details: error.details,
+        retryable: error.retryable,
+        retry_after_ms: error.retry_after_ms,
     })
 }
 

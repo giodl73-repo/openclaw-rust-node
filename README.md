@@ -96,13 +96,34 @@ while callers retain control of secret storage. The successful hello payload
 is available through `session.hello()`, including any issued device token for
 application-owned persistence.
 
+`ReconnectPolicy` converts connection failures into explicit reusable actions:
+
+- transient failures use deterministic exponential backoff from one to 30
+  seconds and reset after a successful connection;
+- ordinary request failures keep the healthy session instead of triggering a
+  transport reconnect;
+- device-pairing failures preserve the sanitized request ID, reason, requested
+  role/scopes, remediation, and Gateway retry hints;
+- pairing normally pauses for manual approval, unless the Gateway explicitly
+  says to wait and retry;
+- credential, protocol, local identity, and endpoint-configuration failures
+  pause instead of creating reconnect churn;
+- a shared-token mismatch can request exactly one stored-device-token retry,
+  but only when the application explicitly marks that token as available for
+  an independently trusted endpoint.
+
+The policy neither sleeps nor owns credentials. Applications execute the
+returned action, persist identity/device tokens in their own secret store, and
+resume after operator approval. Device pairing remains separate from the later
+node capability-approval state.
+
 The internal conformance guard pins the first published Gateway protocol beta
 and records its actual node-facing coverage in
 [`protocol/node-contract.json`](protocol/node-contract.json).
 
-Next comes reconnect and pairing policy, followed by a bounded command-handler
-API. Those layers will build on this client rather than introducing
-application-specific behavior.
+Next comes node capability approval and a bounded command-handler API. Those
+layers will build on this client rather than introducing application-specific
+behavior.
 
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
