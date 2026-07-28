@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -181,12 +181,20 @@ pub struct NodeConnectOptions {
     min_protocol: u32,
     max_protocol: u32,
     client: ClientInfo,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    caps: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    commands: Vec<String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    permissions: BTreeMap<String, bool>,
+    #[serde(rename = "caps", skip_serializing_if = "Vec::is_empty")]
+    advertised_caps: Vec<String>,
+    #[serde(rename = "commands", skip_serializing_if = "Vec::is_empty")]
+    advertised_commands: Vec<String>,
+    #[serde(rename = "permissions", skip_serializing_if = "BTreeMap::is_empty")]
+    advertised_permissions: BTreeMap<String, bool>,
+    #[serde(skip)]
+    declared_caps: Vec<String>,
+    #[serde(skip)]
+    declared_commands: Vec<String>,
+    #[serde(skip)]
+    declared_permissions: BTreeMap<String, bool>,
+    #[serde(skip)]
+    activated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     path_env: Option<String>,
     role: &'static str,
@@ -218,9 +226,13 @@ impl NodeConnectOptions {
                 mode: "node",
                 instance_id: None,
             },
-            caps: Vec::new(),
-            commands: Vec::new(),
-            permissions: BTreeMap::new(),
+            advertised_caps: Vec::new(),
+            advertised_commands: Vec::new(),
+            advertised_permissions: BTreeMap::new(),
+            declared_caps: Vec::new(),
+            declared_commands: Vec::new(),
+            declared_permissions: BTreeMap::new(),
+            activated: false,
             path_env: None,
             role: "node",
             scopes: Vec::new(),
@@ -252,19 +264,31 @@ impl NodeConnectOptions {
 
     #[must_use]
     pub fn capability(mut self, value: impl Into<String>) -> Self {
-        self.caps.push(value.into());
+        self.declared_caps.push(value.into());
         self
     }
 
     #[must_use]
     pub fn command(mut self, value: impl Into<String>) -> Self {
-        self.commands.push(value.into());
+        self.declared_commands.push(value.into());
         self
     }
 
     #[must_use]
     pub fn permission(mut self, name: impl Into<String>, allowed: bool) -> Self {
-        self.permissions.insert(name.into(), allowed);
+        self.declared_permissions.insert(name.into(), allowed);
+        self
+    }
+
+    /// Advertise the declared node surface on this connection.
+    ///
+    /// Declarations are withheld by default so an embedding can establish its
+    /// own readiness before asking the Gateway to approve or expose them.
+    /// Gateway approval remains authoritative and is intentionally not inferred
+    /// from a successful `hello-ok` response.
+    #[must_use]
+    pub fn activate(mut self) -> Self {
+        self.activated = true;
         self
     }
 
@@ -308,6 +332,12 @@ impl NodeConnectOptions {
     }
 
     fn finalize_identity(mut self, nonce: &str) -> Result<Self, IdentityError> {
+        if self.activated {
+            self.advertised_caps.clone_from(&self.declared_caps);
+            self.advertised_commands.clone_from(&self.declared_commands);
+            self.advertised_permissions
+                .clone_from(&self.declared_permissions);
+        }
         let Some(identity) = self.identity.take() else {
             return Ok(self);
         };
@@ -337,6 +367,39 @@ pub struct Event {
     pub payload: Value,
     #[serde(default)]
     pub seq: Option<u64>,
+}
+
+/// A Gateway-authorized node command invocation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeInvocation {
+    pub id: String,
+    pub node_id: String,
+    pub command: String,
+    pub params: Value,
+    pub timeout_ms: Option<u64>,
+    pub idempotency_key: Option<String>,
+}
+
+/// A structured final result for a node invocation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InvocationResult {
+    Success(Value),
+    Failure { code: String, message: String },
+}
+
+impl InvocationResult {
+    #[must_use]
+    pub fn success(payload: Value) -> Self {
+        Self::Success(payload)
+    }
+
+    #[must_use]
+    pub fn failure(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Failure {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -372,6 +435,8 @@ pub enum ClientError {
     InvalidFrame(String),
     #[error("event consumer fell behind by {0} events")]
     EventLagged(u64),
+    #[error("the embedding did not activate this node connection")]
+    NotActivated,
 }
 
 pub struct NodeClient;
@@ -410,6 +475,7 @@ impl NodeClient {
             .await
             .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
         let options = options.finalize_identity(&nonce)?;
+        let activated = options.activated;
 
         let connect_id = "rust-node-connect-1";
         send_request(&mut socket, connect_id, "connect", json!(options)).await?;
@@ -423,21 +489,26 @@ impl NodeClient {
         let (command_tx, command_rx) = mpsc::channel(config.max_in_flight.max(1));
         let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
         let (event_tx, initial_event_rx) = broadcast::channel(config.event_capacity.max(1));
+        let (invocation_tx, initial_invocation_rx) =
+            broadcast::channel(config.event_capacity.max(1));
         let (closed_tx, closed_rx) = watch::channel(None);
         tokio::spawn(run_session(
             socket,
             command_rx,
             cancel_rx,
             event_tx.clone(),
+            invocation_tx,
             closed_tx,
         ));
 
         Ok(NodeSession {
             hello,
+            activated,
             command_tx,
             cancel_tx,
             event_tx,
             event_rx: Arc::new(Mutex::new(initial_event_rx)),
+            invocation_rx: Arc::new(Mutex::new(initial_invocation_rx)),
             closed_rx,
             next_request_id: Arc::new(AtomicU64::new(1)),
             request_timeout: config.request_timeout,
@@ -449,10 +520,12 @@ impl NodeClient {
 #[derive(Clone)]
 pub struct NodeSession {
     hello: Value,
+    activated: bool,
     command_tx: mpsc::Sender<SessionCommand>,
     cancel_tx: mpsc::UnboundedSender<String>,
     event_tx: broadcast::Sender<Event>,
     event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
+    invocation_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
     closed_rx: watch::Receiver<Option<String>>,
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
@@ -463,6 +536,15 @@ impl NodeSession {
     #[must_use]
     pub fn hello(&self) -> &Value {
         &self.hello
+    }
+
+    /// Whether the embedding activated its declared surface for this connection.
+    ///
+    /// This is local readiness only. `OpenClaw` may still narrow the effective
+    /// surface while node capability approval is pending.
+    #[must_use]
+    pub fn is_activated(&self) -> bool {
+        self.activated
     }
 
     #[must_use]
@@ -486,6 +568,60 @@ impl NodeSession {
             Err(broadcast::error::RecvError::Lagged(count)) => Err(ClientError::EventLagged(count)),
             Err(broadcast::error::RecvError::Closed) => Err(self.closed_error()),
         }
+    }
+
+    /// Receive the next Gateway-authorized invocation for this connection.
+    ///
+    /// Invocation events remain available from the ordinary event stream too.
+    /// The method refuses work when this connection was not locally activated.
+    /// # Errors
+    ///
+    /// Returns an activation, lag, closed-session, or malformed-payload error.
+    pub async fn next_invocation(&self) -> Result<NodeInvocation, ClientError> {
+        if !self.activated {
+            return Err(ClientError::NotActivated);
+        }
+        let event = match self.invocation_rx.lock().await.recv().await {
+            Ok(event) => event,
+            Err(broadcast::error::RecvError::Lagged(count)) => {
+                return Err(ClientError::EventLagged(count));
+            }
+            Err(broadcast::error::RecvError::Closed) => return Err(self.closed_error()),
+        };
+        parse_invocation(event.payload)
+    }
+
+    /// Complete one invocation using `OpenClaw`'s published result contract.
+    /// # Errors
+    ///
+    /// Returns validation, Gateway, timeout, or closed-session errors.
+    pub async fn complete_invocation(
+        &self,
+        invocation: &NodeInvocation,
+        result: InvocationResult,
+    ) -> Result<(), ClientError> {
+        if !self.activated {
+            return Err(ClientError::NotActivated);
+        }
+        let params = match result {
+            InvocationResult::Success(payload) => json!({
+                "id": invocation.id,
+                "nodeId": invocation.node_id,
+                "ok": true,
+                "payload": payload,
+            }),
+            InvocationResult::Failure { code, message } => {
+                let code = require_non_empty_result_field("error code", code)?;
+                let message = require_non_empty_result_field("error message", message)?;
+                json!({
+                    "id": invocation.id,
+                    "nodeId": invocation.node_id,
+                    "ok": false,
+                    "error": { "code": code, "message": message },
+                })
+            }
+        };
+        self.request("node.invoke.result", params).await.map(|_| ())
     }
 
     /// Send one Gateway request and wait for its correlated response.
@@ -706,6 +842,7 @@ async fn run_session<S>(
     mut commands: mpsc::Receiver<SessionCommand>,
     mut cancellations: mpsc::UnboundedReceiver<String>,
     events: broadcast::Sender<Event>,
+    invocations: broadcast::Sender<Event>,
     closed: watch::Sender<Option<String>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -735,7 +872,11 @@ async fn run_session<S>(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<IncomingFrame>(text.as_str()) {
                             Ok(IncomingFrame::Event { event, payload, seq }) => {
-                                let _ = events.send(Event { event, payload, seq });
+                                let received = Event { event, payload, seq };
+                                if received.event == "node.invoke.request" {
+                                    let _ = invocations.send(received.clone());
+                                }
+                                let _ = events.send(received);
                             }
                             Ok(IncomingFrame::Response { id, ok, payload, error }) => {
                                 if let Some((method, reply)) = pending.remove(&id) {
@@ -765,6 +906,75 @@ async fn run_session<S>(
         ))));
     }
     let _ = closed.send(Some(close_reason));
+}
+
+fn parse_invocation(payload: Value) -> Result<NodeInvocation, ClientError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload {
+        id: String,
+        node_id: String,
+        command: String,
+        #[serde(
+            default,
+            rename = "paramsJSON",
+            deserialize_with = "deserialize_optional_string"
+        )]
+        params_json: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_optional_u64")]
+        timeout_ms: Option<u64>,
+        #[serde(default, deserialize_with = "deserialize_optional_string")]
+        idempotency_key: Option<String>,
+    }
+
+    let payload: Payload = serde_json::from_value(payload).map_err(|error| {
+        ClientError::InvalidFrame(format!("invalid node.invoke.request: {error}"))
+    })?;
+    let id = require_non_empty_result_field("invocation id", payload.id)?;
+    let node_id = require_non_empty_result_field("invocation node id", payload.node_id)?;
+    let command = require_non_empty_result_field("invocation command", payload.command)?;
+    let idempotency_key = payload
+        .idempotency_key
+        .map(|value| require_non_empty_result_field("invocation idempotency key", value))
+        .transpose()?;
+    let params = match payload.params_json {
+        Some(value) => serde_json::from_str(&value).map_err(|error| {
+            ClientError::InvalidFrame(format!("invalid invocation paramsJSON: {error}"))
+        })?,
+        None => Value::Null,
+    };
+    Ok(NodeInvocation {
+        id,
+        node_id,
+        command,
+        params,
+        timeout_ms: payload.timeout_ms,
+        idempotency_key,
+    })
+}
+
+fn require_non_empty_result_field(name: &str, value: String) -> Result<String, ClientError> {
+    if value.is_empty() {
+        return Err(ClientError::InvalidFrame(format!(
+            "{name} must not be empty"
+        )));
+    }
+    Ok(value)
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    u64::deserialize(deserializer).map(Some)
 }
 
 fn response_result(
@@ -829,4 +1039,46 @@ fn format_close(frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFr
             )
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invocation_payload_rejects_null_optional_fields_and_unknown_fields() {
+        let required = json!({
+            "id": "invoke-1",
+            "nodeId": "node-1",
+            "command": "example.status"
+        });
+        assert!(parse_invocation(required.clone()).is_ok());
+
+        for field in ["paramsJSON", "timeoutMs", "idempotencyKey"] {
+            let mut invalid = required.clone();
+            invalid[field] = Value::Null;
+            assert!(matches!(
+                parse_invocation(invalid),
+                Err(ClientError::InvalidFrame(_))
+            ));
+        }
+
+        let mut unknown = required;
+        unknown["extra"] = json!(true);
+        assert!(matches!(
+            parse_invocation(unknown),
+            Err(ClientError::InvalidFrame(_))
+        ));
+
+        let empty_idempotency_key = json!({
+            "id": "invoke-1",
+            "nodeId": "node-1",
+            "command": "example.status",
+            "idempotencyKey": ""
+        });
+        assert!(matches!(
+            parse_invocation(empty_idempotency_key),
+            Err(ClientError::InvalidFrame(_))
+        ));
+    }
 }

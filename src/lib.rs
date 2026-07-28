@@ -10,8 +10,8 @@ mod reconnect;
 mod wire;
 
 pub use client::{
-    ClientError, ConnectAuth, DeviceProof, Event, NodeClient, NodeClientConfig, NodeConnectOptions,
-    NodeSession,
+    ClientError, ConnectAuth, DeviceProof, Event, InvocationResult, NodeClient, NodeClientConfig,
+    NodeConnectOptions, NodeInvocation, NodeSession,
 };
 pub use identity::{IdentityError, NodeIdentity};
 pub use manifest::{

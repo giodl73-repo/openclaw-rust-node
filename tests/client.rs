@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use openclaw_node::{
-    ClientError, ConnectAuth, Event, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity,
+    ClientError, ConnectAuth, Event, InvocationResult, NodeClient, NodeClientConfig,
+    NodeConnectOptions, NodeIdentity,
 };
 use serde_json::{Value, json};
 use std::{io, time::Duration};
@@ -80,6 +81,7 @@ async fn generic_client_connects_publishes_events_and_correlates_requests() {
                 NodeConnectOptions::new("0.0.0-test", "test")
                     .display_name("Reusable test node")
                     .command("example.status")
+                    .activate()
                     .auth(ConnectAuth::token("test-token"))
                     .identity(NodeIdentity::from_secret_bytes([7; 32])),
             )
@@ -102,6 +104,165 @@ async fn generic_client_connects_publishes_events_and_correlates_requests() {
             seq: Some(7),
         }
     );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn declarations_are_withheld_until_the_embedding_activates_them() {
+    for (activate, expected_surface) in [(false, false), (true, true)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({"type":"event","event":"connect.challenge","payload":{"nonce":"activation-nonce"}}),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            assert_eq!(
+                connect["params"].get("commands").is_some(),
+                expected_surface
+            );
+            assert_eq!(connect["params"].get("caps").is_some(), expected_surface);
+            assert_eq!(
+                connect["params"].get("permissions").is_some(),
+                expected_surface
+            );
+            send_json(
+                &mut socket,
+                json!({"type":"res","id":connect["id"],"ok":true,"payload":{"type":"hello-ok","protocol":4}}),
+            )
+            .await;
+        });
+
+        let session = NodeClient::connect(
+            NodeClientConfig::new(format!("ws://{address}")),
+            move |_nonce| async move {
+                let options = NodeConnectOptions::new("test", "test")
+                    .capability("example")
+                    .command("example.status")
+                    .permission("example.read", true);
+                Ok::<_, io::Error>(if activate {
+                    options.activate()
+                } else {
+                    options
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(session.is_activated(), activate);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn activated_sessions_receive_and_complete_typed_invocations() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"invoke-nonce"}}),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":connect["id"],"ok":true,"payload":{"type":"hello-ok","protocol":4}}),
+        )
+        .await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event",
+                "event":"node.invoke.request",
+                "payload":{
+                    "id":"invoke-1",
+                    "nodeId":"node-1",
+                    "command":"example.status",
+                    "paramsJSON":"{\"verbose\":true}",
+                    "timeoutMs":5000,
+                    "idempotencyKey":"once-1"
+                }
+            }),
+        )
+        .await;
+        let result = receive_json(&mut socket).await;
+        assert_eq!(result["method"], "node.invoke.result");
+        assert_eq!(result["params"]["id"], "invoke-1");
+        assert_eq!(result["params"]["nodeId"], "node-1");
+        assert_eq!(result["params"]["ok"], true);
+        assert_eq!(result["params"]["payload"], json!({"ready":true}));
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":result["id"],"ok":true,"payload":{"accepted":true}}),
+        )
+        .await;
+    });
+
+    let session = NodeClient::connect(
+        NodeClientConfig::new(format!("ws://{address}")),
+        |_nonce| async {
+            Ok::<_, io::Error>(
+                NodeConnectOptions::new("test", "test")
+                    .command("example.status")
+                    .activate(),
+            )
+        },
+    )
+    .await
+    .unwrap();
+    let invocation = session.next_invocation().await.unwrap();
+    assert_eq!(invocation.id, "invoke-1");
+    assert_eq!(invocation.node_id, "node-1");
+    assert_eq!(invocation.command, "example.status");
+    assert_eq!(invocation.params, json!({"verbose":true}));
+    assert_eq!(invocation.timeout_ms, Some(5000));
+    assert_eq!(invocation.idempotency_key.as_deref(), Some("once-1"));
+    session
+        .complete_invocation(
+            &invocation,
+            InvocationResult::success(json!({"ready":true})),
+        )
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn inactive_sessions_refuse_invocation_dispatch() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"inactive-nonce"}}),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":connect["id"],"ok":true,"payload":{"type":"hello-ok","protocol":4}}),
+        )
+        .await;
+    });
+    let session = NodeClient::connect(
+        NodeClientConfig::new(format!("ws://{address}")),
+        |_nonce| async { Ok::<_, io::Error>(NodeConnectOptions::new("test", "test")) },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        session.next_invocation().await,
+        Err(ClientError::NotActivated)
+    ));
     server.await.unwrap();
 }
 

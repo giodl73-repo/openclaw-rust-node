@@ -201,7 +201,8 @@ fn classify_pause(error: &ClientError) -> Option<ReconnectPause> {
         | ClientError::ChallengeTimeout
         | ClientError::RequestTimeout(_)
         | ClientError::Closed(_)
-        | ClientError::EventLagged(_) => None,
+        | ClientError::EventLagged(_)
+        | ClientError::NotActivated => None,
     }
 }
 
@@ -265,7 +266,7 @@ fn is_session_request_error(error: &ClientError) -> bool {
         ClientError::Gateway { method, .. } | ClientError::RequestTimeout(method) => {
             method != "connect"
         }
-        ClientError::EventLagged(_) => true,
+        ClientError::EventLagged(_) | ClientError::NotActivated => true,
         _ => false,
     }
 }

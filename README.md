@@ -96,6 +96,21 @@ while callers retain control of secret storage. The successful hello payload
 is available through `session.hello()`, including any issued device token for
 application-owned persistence.
 
+Command, capability, and permission declarations are withheld until the
+embedding explicitly calls `NodeConnectOptions::activate()`. This prevents a
+process that is merely able to connect from advertising work it is not ready
+to handle. Activation is local readiness, not an approval claim: OpenClaw may
+still narrow the surface while a separate node-capability approval is pending,
+and the node-role `hello-ok` payload does not disclose that effective surface.
+Custom command names must also be admitted by OpenClaw policy, for example by
+an installed plugin policy or an operator entry in
+`gateway.nodes.allowCommands`; activation never bypasses that allowlist.
+
+Activated sessions expose typed `NodeInvocation` values through
+`session.next_invocation()` and complete them with
+`session.complete_invocation()`. The embedding owns command routing and handler
+logic; the client keeps this transport primitive independent of any one app.
+
 `ReconnectPolicy` converts connection failures into explicit reusable actions:
 
 - transient failures use deterministic exponential backoff from one to 30
@@ -121,9 +136,10 @@ The internal conformance guard pins the first published Gateway protocol beta
 and records its actual node-facing coverage in
 [`protocol/node-contract.json`](protocol/node-contract.json).
 
-Next comes node capability approval and a bounded command-handler API. Those
-layers will build on this client rather than introducing application-specific
-behavior.
+Next comes the bounded handler runtime: routing, deadlines, cancellation,
+concurrency/output limits, overload behavior, and panic containment. The typed
+dispatch primitive remains usable directly by embeddings that want to own
+those policies themselves.
 
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
