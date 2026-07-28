@@ -42,8 +42,9 @@ openclaw-node-runtime      bounded command-handler API
 openclaw-node              optional headless binary
 ```
 
-See [the proposal](docs/proposal.md) for scope, security requirements, and the
-planned evidence slice.
+See [RFC 0001](rfcs/0001-rust-node-client-and-host.md) for the proposed design,
+six-PR implementation plan, security requirements, and evidence gates. The
+earlier [proposal](docs/proposal.md) remains as a shorter discussion brief.
 
 ## Principles
 
@@ -59,7 +60,8 @@ planned evidence slice.
 
 ## Current phase
 
-1. Confirm repository placement and ownership with OpenClaw maintainers.
+1. Review [RFC 0001](rfcs/0001-rust-node-client-and-host.md) with OpenClaw
+   maintainers.
 2. Establish the protocol-schema pin and conformance workflow.
 3. Build one minimal client that pairs and handles a harmless read-only
    command.
