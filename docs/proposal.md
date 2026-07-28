@@ -58,6 +58,9 @@ The target architecture may eventually contain:
 - Release and wire-protocol version metadata.
 - Checks against a pinned, integrity-verified
   `@openclaw/gateway-protocol/protocol.schema.json`.
+- A node-contract manifest that limits generated/checked Rust types to the
+  node-facing schemas, errors, events, and lifecycle fixtures required by this
+  project.
 - Safe handling of documented additive fields.
 
 ### Node client crate
@@ -67,9 +70,10 @@ The target architecture may eventually contain:
 - Ed25519 device identity and signed challenge response.
 - Device-token persistence, rotation, and revocation.
 - `role: "node"` and `client.mode: "node"` handshake.
-- Pairing and credential-required states.
+- Separate device-pairing, node-capability-approval, and credential-required
+  states.
 - Current and supported N-1 node protocol behavior.
-- Capability, command, permission, plugin-tool, and skill advertisement.
+- Capability, command, and permission advertisement.
 - Invocation request, input, progress, cancellation, and result lifecycle.
 - Bounded frames, queues, output, and in-flight work.
 - Terminal reconnect-pause behavior for incompatible or revoked credentials.
@@ -87,7 +91,9 @@ The target architecture may eventually contain:
 ### Headless binary
 
 - Minimal service configuration and diagnostics.
-- `system.which` and low-risk status commands first.
+- A bounded namespaced status command first.
+- `system.which` only after matching its admin-sensitive approval, validation,
+  path-disclosure, and result semantics.
 - Cross-platform service examples.
 - `system.run.prepare` and `system.run` only after security-policy parity is
   demonstrated.
@@ -102,10 +108,31 @@ The Rust project must not become a second Gateway protocol owner.
 1. OpenClaw's published Gateway protocol remains authoritative.
 2. Every Rust release pins an OpenClaw release and wire protocol version.
 3. The generated protocol schema is vendored with an integrity hash.
-4. Rust types and fixtures are checked against that schema.
-5. Black-box tests run against real, pinned Gateway versions.
-6. Incompatible behavior blocks release instead of adding a silent fallback.
-7. Protocol changes land and release in `openclaw/openclaw` first.
+4. A node-contract manifest maps each required behavior to its authoritative
+   schema, documented error, or conformance fixture.
+5. Rust types and fixtures are checked against that manifest and schema. A
+   missing upstream contract, including a missing cancellation payload schema,
+   blocks implementation rather than being invented locally.
+6. Black-box tests run against real, pinned Gateway versions.
+7. Incompatible behavior blocks release instead of adding a silent fallback.
+8. Protocol changes land and release in `openclaw/openclaw` first.
+
+Unrelated changes elsewhere in the full Gateway schema remain visible in drift
+reports but do not force Rust node-type churn.
+
+## Pairing and enrollment
+
+Device pairing and node capability approval are separate contracts. Device
+pairing authenticates the signed identity and issues a Gateway-bound token.
+After connection, the Gateway independently compares the declared command and
+capability surface with the approved surface; new or widened commands remain
+filtered until their separate `node.pair.*` request is approved.
+
+V1 supports the documented manual approval flow. OpenClaw's default SSH
+auto-approval invokes `openclaw node identity --json`, so the standalone binary
+must either provide a compatible identity-inspection shim, consume a future
+upstream-configurable probe contract, or clearly fall back to manual approval.
+It must not weaken the key-match check.
 
 ## Credential storage
 
@@ -162,23 +189,35 @@ implementations must pass the same corpus before the Rust binary claims
 ### V1.0: transport and embedding
 
 - protocol schema pin;
-- device identity and pairing;
-- reconnect and protocol negotiation;
+- node-contract manifest;
+- WebSocket transport state machine;
+- device identity and device pairing;
+- node capability approval and reapproval;
+- reconnect and protocol compatibility-window handling;
 - command advertisement;
-- request/result, progress, input, and cancellation;
 - custom command-handler API;
 - Gateway conformance runner;
-- one harmless read-only command.
+- one bounded namespaced status command.
 
-### V1.1: generic headless host
+### V1.1: invocation lifecycle
+
+- request and result with bounded concurrency and output;
+- ordered input and progress;
+- cancellation only after OpenClaw publishes its event payload contract;
+- timeout, disconnect, malformed-frame, and cancellation-race conformance.
+
+### V1.2: generic headless host
+
+- foreground binary, configuration, health, readiness, and diagnostics;
+- service examples and signed experimental artifacts after ownership gates;
+- no OpenClaw-owned `system.*` command in the initial binary.
+
+### V1.3: admin-sensitive read-only parity
 
 - `system.which`;
-- runtime status;
-- health and diagnostics;
-- service packaging;
-- signed cross-platform artifacts.
+- exact validation, PATH, result, policy, and disclosure parity.
 
-### V1.2: execution parity
+### Post-V1: execution parity
 
 - upstream-owned execution-policy fixtures;
 - `system.run.prepare`;
@@ -194,20 +233,25 @@ implementations must pass the same corpus before the Rust binary claims
 - Reimplementing every platform capability in V1.
 - Adding product-specific protocol fields.
 - Representing hosting infrastructure or credential brokers as paired nodes.
+- Publishing dynamic plugin tools or skills in V1.
+- Supporting pending work without a concrete adopter and dedicated contract
+  review.
 
 ## Smallest evidence slice
 
 1. Reuse the relevant behavior and tests from OpenClaw's Rust Linux companion
    in one experimental crate.
 2. Connect to a real Gateway as `role: "node"`.
-3. Complete normal device pairing.
-4. Advertise one read-only command.
-5. Return one accepted result and one structured rejection.
-6. Prove timeout, cancellation, reconnect, overload, malformed input,
+3. Complete device pairing and persist the Gateway-bound token.
+4. Reconnect, create the separate node capability request, and prove its
+   command remains filtered before approval.
+5. Approve and advertise one bounded namespaced read-only command.
+6. Return one accepted result and one structured rejection.
+7. Prove timeout, cancellation, reconnect, overload, malformed input,
    credential revocation, and protocol mismatch behavior.
-7. Run release gates against pinned current and supported predecessor Gateway
+8. Run release gates against pinned current and supported predecessor Gateway
    artifacts, with OpenClaw `main` as a separate non-gating drift canary.
-8. Measure binary size, idle and loaded RSS, connect time, reconnect time, and
+9. Measure binary size, idle and loaded RSS, connect time, reconnect time, and
    invocation overhead against `openclaw node run`.
 
 ## Decisions needed from OpenClaw maintainers
