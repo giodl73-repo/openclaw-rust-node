@@ -20,6 +20,8 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
+use crate::identity::{IdentityError, NodeIdentity};
+
 const PROTOCOL_VERSION: u32 = 4;
 const MINIMUM_NODE_PROTOCOL_VERSION: u32 = 3;
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -166,6 +168,8 @@ struct ClientInfo {
     display_name: Option<String>,
     version: String,
     platform: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_family: Option<String>,
     mode: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     instance_id: Option<String>,
@@ -189,6 +193,8 @@ pub struct NodeConnectOptions {
     scopes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device: Option<DeviceProof>,
+    #[serde(skip)]
+    identity: Option<NodeIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     auth: Option<ConnectAuth>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +214,7 @@ impl NodeConnectOptions {
                 display_name: None,
                 version: version.into(),
                 platform: platform.into(),
+                device_family: None,
                 mode: "node",
                 instance_id: None,
             },
@@ -218,6 +225,7 @@ impl NodeConnectOptions {
             role: "node",
             scopes: Vec::new(),
             device: None,
+            identity: None,
             auth: None,
             locale: None,
             user_agent: None,
@@ -233,6 +241,12 @@ impl NodeConnectOptions {
     #[must_use]
     pub fn instance_id(mut self, value: impl Into<String>) -> Self {
         self.client.instance_id = Some(value.into());
+        self
+    }
+
+    #[must_use]
+    pub fn device_family(mut self, value: impl Into<String>) -> Self {
+        self.client.device_family = Some(value.into());
         self
     }
 
@@ -263,6 +277,15 @@ impl NodeConnectOptions {
     #[must_use]
     pub fn device(mut self, value: DeviceProof) -> Self {
         self.device = Some(value);
+        self.identity = None;
+        self
+    }
+
+    /// Use a library-managed Ed25519 identity for the final connect signature.
+    #[must_use]
+    pub fn identity(mut self, value: NodeIdentity) -> Self {
+        self.identity = Some(value);
+        self.device = None;
         self
     }
 
@@ -282,6 +305,28 @@ impl NodeConnectOptions {
     pub fn user_agent(mut self, value: impl Into<String>) -> Self {
         self.user_agent = Some(value.into());
         self
+    }
+
+    fn finalize_identity(mut self, nonce: &str) -> Result<Self, IdentityError> {
+        let Some(identity) = self.identity.take() else {
+            return Ok(self);
+        };
+        self.device = Some(identity.sign_connect(
+            nonce,
+            &self.client.platform,
+            self.client.device_family.as_deref(),
+            self.auth.as_ref().and_then(ConnectAuth::signature_token),
+        )?);
+        Ok(self)
+    }
+}
+
+impl ConnectAuth {
+    fn signature_token(&self) -> Option<&str> {
+        self.token
+            .as_deref()
+            .or(self.device_token.as_deref())
+            .or(self.bootstrap_token.as_deref())
     }
 }
 
@@ -308,6 +353,8 @@ pub enum ClientError {
     InvalidChallenge(String),
     #[error("connect parameter callback failed: {0}")]
     ConnectParams(String),
+    #[error("node identity failed: {0}")]
+    Identity(#[from] IdentityError),
     #[error("Gateway rejected {method}: {code}: {message}")]
     Gateway {
         method: String,
@@ -357,9 +404,10 @@ impl NodeClient {
         let nonce = tokio::time::timeout(config.challenge_timeout, wait_for_challenge(&mut socket))
             .await
             .map_err(|_| ClientError::ChallengeTimeout)??;
-        let options = make_options(nonce)
+        let options = make_options(nonce.clone())
             .await
             .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
+        let options = options.finalize_identity(&nonce)?;
 
         let connect_id = "rust-node-connect-1";
         send_request(&mut socket, connect_id, "connect", json!(options)).await?;

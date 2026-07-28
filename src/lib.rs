@@ -4,6 +4,7 @@
 //! authoritative for the Gateway protocol, pairing, and command semantics.
 
 mod client;
+mod identity;
 mod manifest;
 mod wire;
 
@@ -11,6 +12,7 @@ pub use client::{
     ClientError, ConnectAuth, DeviceProof, Event, NodeClient, NodeClientConfig, NodeConnectOptions,
     NodeSession,
 };
+pub use identity::{IdentityError, NodeIdentity};
 pub use manifest::{
     ContractEntry, ContractStatus, NodeContractManifest, ProtocolPin, load_manifest, load_pin,
 };

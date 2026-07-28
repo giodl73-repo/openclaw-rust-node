@@ -68,16 +68,19 @@ requests, publishes events, bounds request timeouts, and fails pending work on
 disconnect. It contains no Lobster or platform-specific behavior.
 
 ```rust,no_run
-# use openclaw_node::{ConnectAuth, NodeClient, NodeClientConfig, NodeConnectOptions};
+# use openclaw_node::{ConnectAuth, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity};
+# use std::convert::Infallible;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+// Persist these secret bytes in the platform credential store and restore the
+// same identity with NodeIdentity::from_secret_bytes on the next launch.
+let identity = NodeIdentity::generate()?;
 let session = NodeClient::connect(
     NodeClientConfig::new("ws://127.0.0.1:18789"),
-    |_nonce| async {
-        Ok::<_, std::io::Error>(
-            NodeConnectOptions::new("0.1.0", std::env::consts::OS)
+    |_nonce| async move {
+        Ok::<_, Infallible>(NodeConnectOptions::new("0.1.0", std::env::consts::OS)
                 .display_name("My Rust node")
-                .auth(ConnectAuth::token("gateway-token")),
-        )
+                .auth(ConnectAuth::token("gateway-token"))
+                .identity(identity))
     },
 ).await?;
 
@@ -88,13 +91,18 @@ while let Ok(event) = session.next_event().await {
 # }
 ```
 
+`NodeIdentity` generates and signs the canonical Ed25519 v3 Gateway payload,
+while callers retain control of secret storage. The successful hello payload
+is available through `session.hello()`, including any issued device token for
+application-owned persistence.
+
 The internal conformance guard pins the first published Gateway protocol beta
 and records its actual node-facing coverage in
 [`protocol/node-contract.json`](protocol/node-contract.json).
 
-Next comes reusable identity persistence and pairing support, followed by a
-bounded command-handler API. Those layers will build on this client rather than
-introducing application-specific behavior.
+Next comes reconnect and pairing policy, followed by a bounded command-handler
+API. Those layers will build on this client rather than introducing
+application-specific behavior.
 
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet

@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use openclaw_node::{
-    ClientError, ConnectAuth, Event, NodeClient, NodeClientConfig, NodeConnectOptions,
+    ClientError, ConnectAuth, Event, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity,
 };
 use serde_json::{Value, json};
 use std::{io, time::Duration};
@@ -26,6 +26,16 @@ async fn generic_client_connects_publishes_events_and_correlates_requests() {
         assert_eq!(connect["params"]["client"]["mode"], "node");
         assert_eq!(connect["params"]["client"]["id"], "node-host");
         assert_eq!(connect["params"]["commands"], json!(["example.status"]));
+        assert_eq!(connect["params"]["device"]["nonce"], "nonce-1");
+        assert_eq!(
+            connect["params"]["device"]["id"].as_str().unwrap().len(),
+            64
+        );
+        assert!(
+            connect["params"]["device"]["signature"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
         send_json(
             &mut socket,
             json!({
@@ -70,7 +80,8 @@ async fn generic_client_connects_publishes_events_and_correlates_requests() {
                 NodeConnectOptions::new("0.0.0-test", "test")
                     .display_name("Reusable test node")
                     .command("example.status")
-                    .auth(ConnectAuth::token("test-token")),
+                    .auth(ConnectAuth::token("test-token"))
+                    .identity(NodeIdentity::from_secret_bytes([7; 32])),
             )
         },
     )
