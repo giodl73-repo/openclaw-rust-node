@@ -1,12 +1,16 @@
-//! Experimental conformance boundary for the `OpenClaw` node contract.
+//! A reusable, asynchronous `OpenClaw` node client.
 //!
-//! This crate is deliberately not a node client. It pins an immutable
-//! published protocol artifact, records which node-facing contracts that
-//! artifact actually publishes, and validates a small set of wire fixtures.
+//! The crate owns transport and request/event ergonomics. `OpenClaw` remains
+//! authoritative for the Gateway protocol, pairing, and command semantics.
 
+mod client;
 mod manifest;
 mod wire;
 
+pub use client::{
+    ClientError, ConnectAuth, DeviceProof, Event, NodeClient, NodeClientConfig, NodeConnectOptions,
+    NodeSession,
+};
 pub use manifest::{
     ContractEntry, ContractStatus, NodeContractManifest, ProtocolPin, load_manifest, load_pin,
 };

@@ -1,4 +1,4 @@
-use openclaw_node_contract::{
+use openclaw_node::{
     ContractStatus, FixtureError, load_manifest, load_pin, validate_fixture, verify_tarball_sha512,
 };
 use std::{fs, path::Path};

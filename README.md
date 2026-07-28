@@ -4,9 +4,8 @@ Experimental Rust node client and headless node host for the
 [OpenClaw](https://github.com/openclaw/openclaw) Gateway protocol.
 
 > [!IMPORTANT]
-> This is an early design and conformance project. It is not currently an
-> official OpenClaw component, does not yet provide a working node client, and
-> makes no compatibility guarantee.
+> This is an experimental working client, not an official OpenClaw component.
+> Its API and protocol compatibility are not yet stable.
 
 ## Goal
 
@@ -60,26 +59,42 @@ records accepted findings and current-source verification.
 - **Useful independently:** the library and binary must be generally useful to
   OpenClaw users and integrations.
 
-## Current phase
+## First reusable slice
 
-1. Review [RFC 0001](rfcs/0001-rust-node-client-and-host.md) with OpenClaw
-   maintainers.
-2. Resolve [OpenClaw #115375](https://github.com/openclaw/openclaw/issues/115375)
-   for the missing node cancellation contract, released node-contract
-   projection, and fixtures.
-3. Land the protocol pin and transport state machine in separately reviewable
-   PRs.
-4. Build the smallest evidence slice: device pairing, separate node capability
-   approval, and one bounded namespaced status command.
-5. Stop for a cost and ownership review before streaming invocation, packaging,
-   built-in commands, or adopter-specific work.
+The unpublished `openclaw-node` crate provides a generic asynchronous
+`NodeClient`. It enforces node role/mode defaults, waits for the Gateway's
+challenge before calling application-owned identity/auth code, correlates
+requests, publishes events, bounds request timeouts, and fails pending work on
+disconnect. It contains no Lobster or platform-specific behavior.
 
-## Conformance scaffold
+```rust,no_run
+# use openclaw_node::{ConnectAuth, NodeClient, NodeClientConfig, NodeConnectOptions};
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let session = NodeClient::connect(
+    NodeClientConfig::new("ws://127.0.0.1:18789"),
+    |_nonce| async {
+        Ok::<_, std::io::Error>(
+            NodeConnectOptions::new("0.1.0", std::env::consts::OS)
+                .display_name("My Rust node")
+                .auth(ConnectAuth::token("gateway-token")),
+        )
+    },
+).await?;
 
-The experimental `openclaw-node-contract` crate pins the first published
-Gateway protocol beta and records its actual node-facing coverage in
-[`protocol/node-contract.json`](protocol/node-contract.json). It is a drift and
-fixture harness, not a working node client.
+while let Ok(event) = session.next_event().await {
+    println!("{}: {}", event.event, event.payload);
+}
+# Ok(())
+# }
+```
+
+The internal conformance guard pins the first published Gateway protocol beta
+and records its actual node-facing coverage in
+[`protocol/node-contract.json`](protocol/node-contract.json).
+
+Next comes reusable identity persistence and pairing support, followed by a
+bounded command-handler API. Those layers will build on this client rather than
+introducing application-specific behavior.
 
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
