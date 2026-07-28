@@ -379,6 +379,8 @@ ready; do not hold the entire implementation in one long stack.
 
 ### OpenClaw U1: Complete the published node event contract
 
+Tracking: [openclaw/openclaw#115375](https://github.com/openclaw/openclaw/issues/115375)
+
 Scope:
 
 - publish the `node.invoke.cancel` payload schema and type;

@@ -64,8 +64,9 @@ records accepted findings and current-source verification.
 
 1. Review [RFC 0001](rfcs/0001-rust-node-client-and-host.md) with OpenClaw
    maintainers.
-2. Upstream the missing node cancellation contract and establish the released
-   node-contract projection and fixtures.
+2. Resolve [OpenClaw #115375](https://github.com/openclaw/openclaw/issues/115375)
+   for the missing node cancellation contract, released node-contract
+   projection, and fixtures.
 3. Land the protocol pin and transport state machine in separately reviewable
    PRs.
 4. Build the smallest evidence slice: device pairing, separate node capability
