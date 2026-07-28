@@ -138,8 +138,9 @@ The client:
    credential-required, incompatible-version, and terminal reconnect-pause
    states;
 7. persists a Gateway-bound device token after device approval;
-8. advertises its declared command, capability, and permission ceilings and
-   separately tracks node capability approval;
+8. advertises its declared command, capability, and permission ceilings only
+   after embedding-controlled activation, while leaving capability approval
+   and effective-surface narrowing authoritative to the Gateway;
 9. keeps dynamic tools, skills, and pending-work capabilities absent from V1
    advertisement unless a later, separately reviewed module implements them.
 
@@ -161,10 +162,14 @@ OpenClaw pairing has two distinct approval layers:
    surface creates a separate `node.pair.requested` request and remains
    ineffective until it is approved or rejected through `node.pair.*`.
 
-The client exposes these as separate states with separate request identifiers,
-retry guidance, expiry, and diagnostics. A successful device pairing does not
+The client exposes device-pairing state directly. Node-capability approval is
+observable through the operator surface and Gateway-authorized invocation, not
+through `hello-ok`: node-role sessions do not receive the operator-scoped
+`node.pair.*` broadcasts, and the successful hello does not disclose the
+effective command surface. The Rust client therefore does not invent an
+approval signal or request identifier. A successful device pairing does not
 mean commands are invocable. Reconnect after device approval and capability
-reapproval are explicit conformance cases.
+reapproval remain explicit black-box conformance cases.
 
 The supported V1 enrollment baseline is manual device and node-capability
 approval. OpenClaw's default SSH auto-approval currently probes
@@ -293,10 +298,10 @@ let node = NodeClient::builder()
     .gateway(gateway)
     .identity_store(identity_store)
     .command("example.status", status_handler)
+    .activate()
     .build()
     .await?;
 
-node.activate().await?;
 node.run().await
 ```
 
@@ -305,6 +310,12 @@ OpenClaw-owned command namespaces, including `system.*`, are reserved. Custom
 handler registration cannot replace a built-in command implementation. Built-in
 commands are exposed only by explicit runtime modules that implement their
 OpenClaw-owned validation, authorization, and result semantics.
+
+Custom namespaces are not implicitly trusted. They must be admitted by the
+Gateway's existing command policy through an installed plugin policy or an
+explicit operator-controlled `gateway.nodes.allowCommands` entry, and they
+still pass the separate node-capability approval flow. Local activation does
+not weaken or replace either Gateway gate.
 
 ## Compatibility
 
@@ -328,10 +339,11 @@ OpenClaw-owned validation, authorization, and result semantics.
 The client exposes structured:
 
 - connection state;
-- device-pairing, node-capability-approval, and credential state;
+- device-pairing, local activation, and credential state;
 - advertised protocol range, server-reported protocol, and legacy-window
   classification;
-- declared and effective command surfaces;
+- the locally declared surface, with the Gateway-observed effective surface
+  reported only by operator-side proof;
 - readiness reason;
 - reconnect attempts and terminal pause reason;
 - invocation counts, latency, cancellation, timeout, overload, and failures;
@@ -455,21 +467,22 @@ Exit gate:
   token rejection, TLS mismatch, revocation, and explicit re-pairing pass end to
   end.
 
-### Rust R4: Capability approval, activation, and minimal command
+### Rust R4: Capability approval, activation, and minimal dispatch
 
 Scope:
 
-- declared versus effective commands, node capability request and reapproval,
-  embedding activation, readiness, and one fixed bounded custom status command;
-- the minimum request/result path needed to execute that fixed proof command,
-  without a public handler-registration runtime;
+- declared commands, Gateway-observed effective commands, node capability
+  request and reapproval, embedding activation, and local readiness;
+- a reusable typed request/result path sufficient for an embedding to execute
+  one bounded custom proof command, without a handler-registration runtime;
 - no pending work, dynamic tools/skills, streaming invocation, or `system.*`.
 
 Exit gate:
 
-- device and node-capability request IDs are proven distinct;
-- the command is unavailable before capability approval and works only after
-  approval and activation;
+- device and node-capability request IDs are proven distinct through the
+  operator surface;
+- an embedding-owned proof command is unavailable before capability approval
+  and works only after approval and activation;
 - rejection, reconnect, and widened-surface reapproval pass end to end.
 
 This is the smallest evidence slice and the first mandatory continue-or-stop
@@ -479,7 +492,7 @@ review.
 
 Scope:
 
-- replace the fixed proof handler with the public command-registration runtime;
+- build the public command-registration runtime on the typed dispatch primitive;
 - complete request/result lifecycle, deadlines, local cancellation-token
   plumbing, optional node-facing idempotency keys, queue/concurrency/output
   bounds, structured overload, malformed payloads, panic containment, and
