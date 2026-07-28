@@ -48,6 +48,8 @@ as normal paired OpenClaw nodes.
 7. Prove compatibility through black-box tests against real OpenClaw Gateways.
 8. Match the TypeScript reference security policy before exposing
    `system.run`.
+9. Preserve Gateway removal and credential-revocation behavior so a revoked
+   node disconnects, refuses new work, and fails in-flight invocations.
 
 ## Non-goals
 
@@ -96,6 +98,10 @@ Each release pins:
 The schema is vendored for offline builds. CI compares it with the corresponding
 published artifact and checks Rust types and fixtures against it.
 
+Release-gating CI uses immutable OpenClaw release tags and artifacts. A separate
+non-gating canary may run against OpenClaw `main` to detect upcoming drift, but a
+moving branch cannot define release reproducibility.
+
 ### Connection lifecycle
 
 The client:
@@ -113,6 +119,10 @@ The client:
 
 Protocol incompatibility or revoked credentials stop automatic reconnect and
 surface an actionable not-ready state.
+
+Gateway-initiated node removal or credential revocation is authoritative. A
+revoked connection is closed, in-flight invocations fail, new work is refused,
+and the client does not silently create a new identity or auto-pair.
 
 ### Credential storage
 
@@ -149,7 +159,7 @@ Handlers receive:
 
 - command name;
 - validated or raw JSON parameters;
-- invocation ID and idempotency key;
+- invocation ID and optional idempotency key;
 - deadline and cancellation signal;
 - a bounded ordered progress writer.
 
@@ -160,6 +170,11 @@ output.
 Disconnect fails in-flight invocations. The client does not replay them
 automatically. Commands that support caller retries own durable idempotency
 handling.
+
+OpenClaw also defines bounded pending node work through drain and acknowledgement
+methods. V1 must either implement that queue or explicitly omit every capability
+that relies on it. The conformance matrix records which pending-work classes the
+client supports.
 
 ### Activation and readiness
 
@@ -209,6 +224,14 @@ TypeScript hosts must pass one OpenClaw-owned, language-neutral corpus covering:
 The Rust host must not introduce a weaker fallback or claim partial
 `system.run` compatibility.
 
+If no upstream owner and corpus are available, the project stops at the useful
+read-only headless host delivered by PR 4. It does not independently invent
+execution policy or advertise partial `system.run` support.
+
+Audit, approval, revocation, and emergency-disable semantics remain OpenClaw
+contracts. Rust must match the reference host and may not add a weaker fallback
+or claim stronger guarantees that the Gateway does not provide.
+
 ## Proposed public API
 
 The exact names remain provisional.
@@ -232,6 +255,9 @@ Handlers should be implementable without depending on internal transport types.
 
 - The supported matrix is keyed by both OpenClaw release and wire protocol
   version.
+- Node-version coverage exercises the client range declared by the pinned
+  `MIN_NODE_PROTOCOL_VERSION` and `PROTOCOL_VERSION`; testing predecessor
+  Gateway releases is a separate release-compatibility dimension.
 - Current and supported predecessor Gateways run in CI.
 - Unknown documented additive fields are ignored safely.
 - Unsupported optional methods degrade through explicit discovery or documented
@@ -254,17 +280,36 @@ The client exposes structured:
 Secrets, signatures, tokens, raw approval material, and unrestricted command
 output are never included in diagnostics.
 
+The headless binary provides machine-readable structured logs and a local
+health/readiness surface. A metrics exporter may be added without making it a
+condition of the embeddable client API.
+
 ## Release posture
 
 - MIT license.
 - Documented minimum supported Rust version.
-- Published crates after API review.
-- Signed binaries where build infrastructure is available.
+- No crate or binary is published before PR 4.
+- Public crate and binary names remain provisional until OpenClaw maintainers
+  accept repository and release ownership.
+- Published crates use crates.io Trusted Publishing or an equivalent
+  short-lived release identity.
+- Every published binary is signed; unavailable signing infrastructure blocks
+  that platform artifact rather than producing an unsigned release.
 - Checksums, SBOM, dependency audit, and build provenance.
 - Vendored protocol pins and offline conformance fixtures.
-- Explicit support and end-of-life table.
+- Compatibility table mapping crate version, OpenClaw release range, wire
+  protocol, and minimum supported Rust version.
+- Explicit support and end-of-life table, including N-1 duration and MSRV
+  change policy.
+- Fresh-environment install and artifact smoke tests before tagging.
+- Release runbook covering partial publish failure, crate yanking, artifact
+  withdrawal, advisory publication, and restoration.
 - No "official" label until OpenClaw maintainers accept repository and release
   ownership.
+
+The first release should remain one crate plus one binary. A later multi-crate
+split requires coordinated publish ordering and a tested partial-failure/yank
+runbook because crates.io publication is not atomic.
 
 ## Pull request plan
 
@@ -284,7 +329,12 @@ Scope:
 Exit gate:
 
 - OpenClaw maintainers agree on repository placement, protocol authority,
-  compatibility window, and V1 command boundary.
+  compatibility window, V1 command boundary, naming, and release ownership;
+- the project records one of two explicit outcomes:
+  - accepted path: proceed toward an official OpenClaw home and support model;
+  - independent path: remain clearly experimental and unofficial, publish no
+    official-looking crate or binary names, and make no upstream compatibility
+    guarantee.
 
 ### PR 1: Protocol pin and conformance harness
 
@@ -298,8 +348,9 @@ Scope:
 
 Exit gate:
 
-- fixtures pass against current OpenClaw main and a supported released
-  predecessor;
+- fixtures pass against pinned current and supported predecessor release
+  artifacts;
+- a non-gating OpenClaw `main` canary reports upcoming drift separately;
 - schema drift fails CI.
 
 ### PR 2: Transport, identity, authentication, and pairing
@@ -318,6 +369,8 @@ Exit gate:
 - real Gateway pairing succeeds;
 - invalid signature, stale nonce, token mismatch, revocation, TLS mismatch, and
   incompatible protocol all fail deterministically.
+- revocation during an invocation closes the node session and fails the
+  invocation without automatic re-pairing.
 
 ### PR 3: Invocation runtime and read-only proof
 
@@ -326,6 +379,8 @@ Scope:
 - command registration;
 - activation and readiness;
 - request/result, input, progress, and cancellation;
+- supported pending-work drain and acknowledgement, or an explicit capability
+  exclusion proving no advertised command depends on pending work;
 - queue, concurrency, payload, progress, and output bounds;
 - structured overload and handler-failure behavior;
 - one harmless read-only example command.
@@ -343,13 +398,15 @@ Scope:
 - `openclaw-node` binary;
 - configuration and diagnostics;
 - `system.which` and runtime status;
-- systemd, Windows Service, and foreground examples;
+- systemd, launchd, Windows Service, and foreground examples;
 - initial cross-platform artifacts.
 
 Exit gate:
 
 - behavior matches the TypeScript reference for the promoted commands;
-- release artifact smoke tests and compatibility matrix pass.
+- release artifact smoke tests and compatibility matrix pass;
+- platform-specific credential permissions, structured logs,
+  health/readiness, and graceful shutdown are proven.
 
 At this point the project is useful without remote shell execution.
 
@@ -357,7 +414,10 @@ At this point the project is useful without remote shell execution.
 
 Prerequisite:
 
-- OpenClaw publishes the shared execution-policy corpus.
+- a named OpenClaw owner publishes or accepts the shared execution-policy
+  corpus;
+- an OpenClaw-owned emergency disable or revocation path can stop affected
+  versions from advertising or executing `system.run`.
 
 Scope:
 
@@ -372,7 +432,8 @@ Exit gate:
 
 - both TypeScript and Rust hosts pass the same corpus;
 - no Rust-specific policy exception or fallback exists;
-- security review accepts the implementation.
+- a named OpenClaw security owner accepts the implementation and release
+  rollback runbook.
 
 ## Alternatives considered
 
@@ -427,3 +488,5 @@ Stop or narrow the project if:
    use a hybrid approach?
 5. Where should the shared execution-policy corpus live?
 6. Should OpenClaw's Linux companion eventually consume these crates?
+7. Which existing OpenClaw revocation or command-disable mechanism is the
+   canonical emergency stop for a faulty Rust execution release?

@@ -205,7 +205,8 @@ implementations must pass the same corpus before the Rust binary claims
 5. Return one accepted result and one structured rejection.
 6. Prove timeout, cancellation, reconnect, overload, malformed input,
    credential revocation, and protocol mismatch behavior.
-7. Run against current OpenClaw main and one released supported predecessor.
+7. Run release gates against pinned current and supported predecessor Gateway
+   artifacts, with OpenClaw `main` as a separate non-gating drift canary.
 8. Measure binary size, idle and loaded RSS, connect time, reconnect time, and
    invocation overhead against `openclaw node run`.
 

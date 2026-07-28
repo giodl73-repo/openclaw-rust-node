@@ -45,6 +45,8 @@ openclaw-node              optional headless binary
 See [RFC 0001](rfcs/0001-rust-node-client-and-host.md) for the proposed design,
 six-PR implementation plan, security requirements, and evidence gates. The
 earlier [proposal](docs/proposal.md) remains as a shorter discussion brief.
+The first [role review](rfcs/reviews/0001-craft-role-review-2026-07-28.md)
+records accepted findings and current-source verification.
 
 ## Principles
 
