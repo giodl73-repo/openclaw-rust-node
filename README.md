@@ -111,6 +111,39 @@ Activated sessions expose typed `NodeInvocation` values through
 `session.complete_invocation()`. The embedding owns command routing and handler
 logic; the client keeps this transport primitive independent of any one app.
 
+`CommandRuntime` adds the reusable bounded layer: exact-name handlers,
+deterministic command advertisement, deadlines, cooperative local
+cancellation, strict input/output byte limits, panic containment, and a fixed
+concurrency ceiling. It deliberately queues no handler work; saturation
+returns `OVERLOADED` immediately. Result delivery is also bounded. If the
+Gateway stops acknowledging results and that critical delivery buffer fills,
+`run` fails closed with `RuntimeError::DeliverySaturated` so the embedding can
+restart the session instead of losing results or growing memory without bound.
+
+```rust,no_run
+# use openclaw_node::{CommandRuntime, NodeConnectOptions};
+# use serde_json::json;
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+let runtime = CommandRuntime::builder()
+    .max_concurrency(4)
+    .max_output_bytes(64 * 1024)
+    .command("example.status", |_context| async {
+        Ok(json!({ "ready": true }))
+    })
+    .build()?;
+
+let connect_options = runtime.activate(NodeConnectOptions::new("0.1.0", "linux"));
+// Pass connect_options through NodeClient::connect, then run until disconnect:
+// runtime.run(session).await?;
+# let _ = connect_options;
+# Ok(())
+# }
+```
+
+Handler cancellation is local in this slice: timeout and disconnect cancel
+the token and stop runtime-owned handler tasks. Wire cancellation and streaming
+input/progress remain gated on their separately published lifecycle contracts.
+
 `ReconnectPolicy` converts connection failures into explicit reusable actions:
 
 - transient failures use deterministic exponential backoff from one to 30
@@ -136,10 +169,9 @@ The internal conformance guard pins the first published Gateway protocol beta
 and records its actual node-facing coverage in
 [`protocol/node-contract.json`](protocol/node-contract.json).
 
-Next comes the bounded handler runtime: routing, deadlines, cancellation,
-concurrency/output limits, overload behavior, and panic containment. The typed
-dispatch primitive remains usable directly by embeddings that want to own
-those policies themselves.
+The typed dispatch primitive remains usable directly by embeddings that want
+to own runtime policy themselves. The next lifecycle layer is streaming input,
+progress, and wire cancellation only after its OpenClaw contracts are released.
 
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet

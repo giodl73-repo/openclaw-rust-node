@@ -7,6 +7,7 @@ mod client;
 mod identity;
 mod manifest;
 mod reconnect;
+mod runtime;
 mod wire;
 
 pub use client::{
@@ -20,6 +21,10 @@ pub use manifest::{
 pub use reconnect::{
     DevicePairingReason, DevicePairingRequest, ReconnectAction, ReconnectPause, ReconnectPolicy,
     RecoveryStep, StoredDeviceTokenRetry,
+};
+pub use runtime::{
+    CancellationToken, CommandRuntime, CommandRuntimeBuilder, HandlerError, InvocationContext,
+    RuntimeBuildError, RuntimeError,
 };
 pub use wire::{FixtureError, validate_fixture};
 

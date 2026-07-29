@@ -10,7 +10,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore, broadcast, mpsc, oneshot, watch};
@@ -370,7 +370,7 @@ pub struct Event {
 }
 
 /// A Gateway-authorized node command invocation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct NodeInvocation {
     pub id: String,
     pub node_id: String,
@@ -378,6 +378,49 @@ pub struct NodeInvocation {
     pub params: Value,
     pub timeout_ms: Option<u64>,
     pub idempotency_key: Option<String>,
+    received_params_bytes: Option<usize>,
+    received_at: Option<Instant>,
+}
+
+impl PartialEq for NodeInvocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.node_id == other.node_id
+            && self.command == other.command
+            && self.params == other.params
+            && self.timeout_ms == other.timeout_ms
+            && self.idempotency_key == other.idempotency_key
+    }
+}
+
+impl NodeInvocation {
+    /// Construct an invocation for direct programmatic dispatch.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        node_id: impl Into<String>,
+        command: impl Into<String>,
+        params: Value,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            node_id: node_id.into(),
+            command: command.into(),
+            params,
+            timeout_ms: None,
+            idempotency_key: None,
+            received_params_bytes: None,
+            received_at: None,
+        }
+    }
+
+    pub(crate) fn input_bytes(&self) -> Option<usize> {
+        self.received_params_bytes
+    }
+
+    pub(crate) fn received_elapsed(&self) -> Option<Duration> {
+        self.received_at.map(|received| received.elapsed())
+    }
 }
 
 /// A structured final result for a node invocation.
@@ -513,6 +556,7 @@ impl NodeClient {
             next_request_id: Arc::new(AtomicU64::new(1)),
             request_timeout: config.request_timeout,
             in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
+            runtime_marker: Arc::new(()),
         })
     }
 }
@@ -525,14 +569,22 @@ pub struct NodeSession {
     cancel_tx: mpsc::UnboundedSender<String>,
     event_tx: broadcast::Sender<Event>,
     event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
-    invocation_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
+    invocation_rx: Arc<Mutex<broadcast::Receiver<(Event, Instant)>>>,
     closed_rx: watch::Receiver<Option<String>>,
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
     in_flight: Arc<Semaphore>,
+    runtime_marker: Arc<()>,
 }
 
 impl NodeSession {
+    pub(crate) fn runtime_scope(&self) -> (usize, std::sync::Weak<()>) {
+        (
+            Arc::as_ptr(&self.runtime_marker) as usize,
+            Arc::downgrade(&self.runtime_marker),
+        )
+    }
+
     #[must_use]
     pub fn hello(&self) -> &Value {
         &self.hello
@@ -581,14 +633,14 @@ impl NodeSession {
         if !self.activated {
             return Err(ClientError::NotActivated);
         }
-        let event = match self.invocation_rx.lock().await.recv().await {
+        let (event, received_at) = match self.invocation_rx.lock().await.recv().await {
             Ok(event) => event,
             Err(broadcast::error::RecvError::Lagged(count)) => {
                 return Err(ClientError::EventLagged(count));
             }
             Err(broadcast::error::RecvError::Closed) => return Err(self.closed_error()),
         };
-        parse_invocation(event.payload)
+        parse_invocation(event.payload, received_at)
     }
 
     /// Complete one invocation using `OpenClaw`'s published result contract.
@@ -842,7 +894,7 @@ async fn run_session<S>(
     mut commands: mpsc::Receiver<SessionCommand>,
     mut cancellations: mpsc::UnboundedReceiver<String>,
     events: broadcast::Sender<Event>,
-    invocations: broadcast::Sender<Event>,
+    invocations: broadcast::Sender<(Event, Instant)>,
     closed: watch::Sender<Option<String>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -874,7 +926,7 @@ async fn run_session<S>(
                             Ok(IncomingFrame::Event { event, payload, seq }) => {
                                 let received = Event { event, payload, seq };
                                 if received.event == "node.invoke.request" {
-                                    let _ = invocations.send(received.clone());
+                                    let _ = invocations.send((received.clone(), Instant::now()));
                                 }
                                 let _ = events.send(received);
                             }
@@ -908,7 +960,7 @@ async fn run_session<S>(
     let _ = closed.send(Some(close_reason));
 }
 
-fn parse_invocation(payload: Value) -> Result<NodeInvocation, ClientError> {
+fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocation, ClientError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     #[serde(rename_all = "camelCase")]
@@ -938,11 +990,15 @@ fn parse_invocation(payload: Value) -> Result<NodeInvocation, ClientError> {
         .idempotency_key
         .map(|value| require_non_empty_result_field("invocation idempotency key", value))
         .transpose()?;
-    let params = match payload.params_json {
-        Some(value) => serde_json::from_str(&value).map_err(|error| {
-            ClientError::InvalidFrame(format!("invalid invocation paramsJSON: {error}"))
-        })?,
-        None => Value::Null,
+    let (params, received_params_bytes) = match payload.params_json {
+        Some(value) => {
+            let received_params_bytes = value.len();
+            let params = serde_json::from_str(&value).map_err(|error| {
+                ClientError::InvalidFrame(format!("invalid invocation paramsJSON: {error}"))
+            })?;
+            (params, Some(received_params_bytes))
+        }
+        None => (Value::Null, Some(0)),
     };
     Ok(NodeInvocation {
         id,
@@ -951,6 +1007,8 @@ fn parse_invocation(payload: Value) -> Result<NodeInvocation, ClientError> {
         params,
         timeout_ms: payload.timeout_ms,
         idempotency_key,
+        received_params_bytes,
+        received_at: Some(received_at),
     })
 }
 
@@ -1052,13 +1110,13 @@ mod tests {
             "nodeId": "node-1",
             "command": "example.status"
         });
-        assert!(parse_invocation(required.clone()).is_ok());
+        assert!(parse_invocation(required.clone(), Instant::now()).is_ok());
 
         for field in ["paramsJSON", "timeoutMs", "idempotencyKey"] {
             let mut invalid = required.clone();
             invalid[field] = Value::Null;
             assert!(matches!(
-                parse_invocation(invalid),
+                parse_invocation(invalid, Instant::now()),
                 Err(ClientError::InvalidFrame(_))
             ));
         }
@@ -1066,7 +1124,7 @@ mod tests {
         let mut unknown = required;
         unknown["extra"] = json!(true);
         assert!(matches!(
-            parse_invocation(unknown),
+            parse_invocation(unknown, Instant::now()),
             Err(ClientError::InvalidFrame(_))
         ));
 
@@ -1077,8 +1135,26 @@ mod tests {
             "idempotencyKey": ""
         });
         assert!(matches!(
-            parse_invocation(empty_idempotency_key),
+            parse_invocation(empty_idempotency_key, Instant::now()),
             Err(ClientError::InvalidFrame(_))
         ));
+    }
+
+    #[test]
+    fn invocation_equality_ignores_private_wire_encoding_metadata() {
+        let received = parse_invocation(
+            json!({
+                "id": "invoke-1",
+                "nodeId": "node-1",
+                "command": "example.status",
+                "paramsJSON": "{  \"value\" : 1 }"
+            }),
+            Instant::now(),
+        )
+        .unwrap();
+        let programmatic =
+            NodeInvocation::new("invoke-1", "node-1", "example.status", json!({"value": 1}));
+
+        assert_eq!(received, programmatic);
     }
 }
