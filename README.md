@@ -224,6 +224,21 @@ published, signed, attested, supported, or suitable for redistribution. SBOM,
 provenance, service installation, rollback, and release ownership remain
 separate R8 gates.
 
+## Supply-chain evidence
+
+The `Supply chain evidence` workflow scans the locked Cargo dependency graph
+with RustSec and produces a CycloneDX 1.5 JSON SBOM for the executable with
+dependencies for all target platforms. It runs when the dependency graph or
+workflow changes, on a weekly schedule so newly disclosed advisories are
+detected, and on explicit operator request. CI validates the SBOM's root
+package name and Cargo-derived version before retaining it for seven days.
+
+The scanner, generator, and installer action are immutably versioned for this
+evidence slice. The resulting SBOM is not signed, attested, attached to a
+candidate package, or published. Advisory policy beyond known vulnerabilities,
+including license, source, and maintenance policy, remains a separate release
+decision.
+
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
 and the pinned beta does not publish every required node event payload.

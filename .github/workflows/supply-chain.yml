@@ -1,0 +1,74 @@
+name: Supply chain evidence
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/supply-chain.yml
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/supply-chain.yml
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: RustSec audit and CycloneDX SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - name: Install pinned supply-chain tools
+        uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2.85.3
+        with:
+          tool: cargo-audit@0.22.2,cargo-cyclonedx@0.5.9
+
+      - name: Verify locked dependency graph
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
+      - name: Audit locked dependencies
+        run: cargo audit
+
+      - name: Generate and validate binary SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cargo cyclonedx \
+            --format json \
+            --describe binaries \
+            --all-features \
+            --target all \
+            --spec-version 1.5
+          git diff --exit-code -- Cargo.lock
+          mv openclaw-node_bin.cdx.json dist/openclaw-node.cdx.json
+          package_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -er '[.packages[] | select(.name == "openclaw-node")] | if length == 1 then .[0].version else error("expected one openclaw-node package") end'
+          )"
+          jq -e --arg version "$package_version" '
+            .bomFormat == "CycloneDX" and
+            .specVersion == "1.5" and
+            .metadata.component.name == "openclaw-node" and
+            .metadata.component.version == $version and
+            (.components | length > 0)
+          ' dist/openclaw-node.cdx.json >/dev/null
+
+      - name: Upload SBOM evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-node-sbom
+          path: dist/openclaw-node.cdx.json
+          if-no-files-found: error
+          retention-days: 7
