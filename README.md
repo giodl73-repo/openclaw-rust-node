@@ -42,8 +42,11 @@ openclaw-node-runtime      bounded command-handler API
 openclaw-node              optional headless binary
 ```
 
-See [the proposal](docs/proposal.md) for scope, security requirements, and the
-planned evidence slice.
+See [RFC 0001](rfcs/0001-rust-node-client-and-host.md) for the proposed design,
+cross-repository PR sequence, security requirements, and evidence gates. The
+earlier [proposal](docs/proposal.md) remains as a shorter discussion brief.
+The first [role review](rfcs/reviews/0001-craft-role-review-2026-07-28.md)
+records accepted findings and current-source verification.
 
 ## Principles
 
@@ -59,11 +62,17 @@ planned evidence slice.
 
 ## Current phase
 
-1. Confirm repository placement and ownership with OpenClaw maintainers.
-2. Establish the protocol-schema pin and conformance workflow.
-3. Build one minimal client that pairs and handles a harmless read-only
-   command.
-4. Compare behavior against the TypeScript reference node host.
+1. Review [RFC 0001](rfcs/0001-rust-node-client-and-host.md) with OpenClaw
+   maintainers.
+2. Resolve [OpenClaw #115375](https://github.com/openclaw/openclaw/issues/115375)
+   for the missing node cancellation contract, released node-contract
+   projection, and fixtures.
+3. Land the protocol pin and transport state machine in separately reviewable
+   PRs.
+4. Build the smallest evidence slice: device pairing, separate node capability
+   approval, and one bounded namespaced status command.
+5. Stop for a cost and ownership review before streaming invocation, packaging,
+   built-in commands, or adopter-specific work.
 
 ## License
 
