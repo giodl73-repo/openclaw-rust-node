@@ -230,6 +230,15 @@ it does not confer release status or platform publisher identity. Attaching the
 SBOM to a package, service installation, rollback, and release ownership remain
 separate R8 gates.
 
+During artifact retention, verify an archive and its expected hosted builder:
+
+```console
+gh attestation verify <archive> \
+  --repo giodl73-repo/openclaw-rust-node \
+  --signer-workflow giodl73-repo/openclaw-rust-node/.github/workflows/package-acceptance.yml \
+  --deny-self-hosted-runners
+```
+
 ## Supply-chain evidence
 
 The `Supply chain evidence` workflow scans the locked Cargo dependency graph
