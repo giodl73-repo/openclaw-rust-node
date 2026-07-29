@@ -294,15 +294,15 @@ or claim stronger guarantees that the Gateway does not provide.
 The exact names remain provisional.
 
 ```rust
-let node = NodeClient::builder()
-    .gateway(gateway)
-    .identity_store(identity_store)
+let runtime = CommandRuntime::builder()
+    .max_concurrency(4)
+    .max_output_bytes(64 * 1024)
     .command("example.status", status_handler)
-    .activate()
-    .build()
-    .await?;
+    .build()?;
 
-node.run().await
+let options = runtime.activate(NodeConnectOptions::new(version, platform));
+let session = NodeClient::connect(config, make_options(options)).await?;
+runtime.run(session).await
 ```
 
 Handlers should be implementable without depending on internal transport types.
@@ -316,6 +316,15 @@ Gateway's existing command policy through an installed plugin policy or an
 explicit operator-controlled `gateway.nodes.allowCommands` entry, and they
 still pass the separate node-capability approval flow. Local activation does
 not weaken or replace either Gateway gate.
+
+The initial runtime has a zero-length handler queue: work starts under a
+concurrency permit or receives an immediate structured overload result. This
+keeps memory bounded and avoids accepting work whose deadline is already being
+consumed in an application-side queue. Timeout and disconnect cancellation are
+local cooperative signals in R5; wire cancellation remains R6.
+Result delivery is bounded separately. If Gateway acknowledgements stop and
+the critical result buffer saturates, the runtime fails the session closed
+rather than silently dropping results or accumulating unbounded tasks.
 
 ## Compatibility
 
