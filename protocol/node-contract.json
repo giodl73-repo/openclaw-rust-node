@@ -1,0 +1,21 @@
+{
+  "formatVersion": 1,
+  "protocolPin": "pins/2026.7.2-beta.5.json",
+  "contracts": [
+    { "id": "connect.challenge", "direction": "gateway-to-client", "schemaDefinition": null, "status": "missing-upstream", "upstream": "https://github.com/openclaw/openclaw/issues/115375" },
+    { "id": "connect", "direction": "node-to-gateway", "schemaDefinition": "ConnectParams", "status": "published" },
+    { "id": "hello-ok", "direction": "gateway-to-node", "schemaDefinition": "HelloOk", "status": "published" },
+    { "id": "error", "direction": "bidirectional", "schemaDefinition": "ErrorShape", "status": "published" },
+    { "id": "device.pair.requested", "direction": "gateway-to-operator", "schemaDefinition": "DevicePairRequestedEvent", "status": "published" },
+    { "id": "device.pair.resolved", "direction": "gateway-to-client", "schemaDefinition": "DevicePairResolvedEvent", "status": "published" },
+    { "id": "node.pair.requested", "direction": "gateway-to-operator", "schemaDefinition": null, "status": "missing-upstream", "upstream": "https://github.com/openclaw/openclaw/issues/115375" },
+    { "id": "node.pair.resolved", "direction": "gateway-to-operator", "schemaDefinition": null, "status": "missing-upstream", "upstream": "https://github.com/openclaw/openclaw/issues/115375" },
+    { "id": "node.invoke.request", "direction": "gateway-to-node", "schemaDefinition": "NodeInvokeRequestEvent", "status": "published" },
+    { "id": "node.invoke.result", "direction": "node-to-gateway", "schemaDefinition": "NodeInvokeResultParams", "status": "published" },
+    { "id": "node.invoke.input", "direction": "gateway-to-node", "schemaDefinition": "NodeInvokeInputEvent", "status": "published" },
+    { "id": "node.invoke.progress", "direction": "node-to-gateway", "schemaDefinition": "NodeInvokeProgressParams", "status": "published" },
+    { "id": "node.invoke.cancel", "direction": "gateway-to-node", "schemaDefinition": null, "status": "missing-upstream", "upstream": "https://github.com/openclaw/openclaw/pull/115390" },
+    { "id": "disconnect-cleanup", "direction": "behavior", "schemaDefinition": null, "status": "missing-upstream", "upstream": "https://github.com/openclaw/openclaw/issues/115375" },
+    { "id": "node.pending", "direction": "bidirectional", "schemaDefinition": null, "status": "excluded-v1" }
+  ]
+}

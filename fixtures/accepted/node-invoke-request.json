@@ -1,0 +1,12 @@
+{
+  "type": "event",
+  "event": "node.invoke.request",
+  "payload": {
+    "id": "invoke-1",
+    "nodeId": "node-1",
+    "command": "example.status",
+    "paramsJSON": "{}",
+    "timeoutMs": 5000,
+    "idempotencyKey": "turn-1:example.status"
+  }
+}

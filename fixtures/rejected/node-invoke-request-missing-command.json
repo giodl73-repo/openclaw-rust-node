@@ -1,0 +1,8 @@
+{
+  "type": "event",
+  "event": "node.invoke.request",
+  "payload": {
+    "id": "invoke-1",
+    "nodeId": "node-1"
+  }
+}

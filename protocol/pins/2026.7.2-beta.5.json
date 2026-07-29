@@ -1,0 +1,15 @@
+{
+  "package": "@openclaw/gateway-protocol",
+  "version": "2026.7.2-beta.5",
+  "distTag": "beta",
+  "tarball": "https://registry.npmjs.org/@openclaw/gateway-protocol/-/gateway-protocol-2026.7.2-beta.5.tgz",
+  "npmIntegrity": "sha512-/gMRJsruvVAbPqWMQR3kz2u3K+0Y0oXe5ZXK5xvbj5i7wAZK+B4QW5khRBIwYnrhTxPa9IbLJUgUNlomhx/wbw==",
+  "sha512Hex": "fe031126caeebd501b3ea58c411de4cf6bb72bed18d285dee595cae71bdb8f98bbc0064af81e105b9921441230627ae14f13daf486cb254814365a26871ff06f",
+  "sourceRelease": "v2026.7.2-beta.5",
+  "sourceCommit": "ee929dbb857c717a60f3b2b502db5a6dd31b5c11",
+  "schemaId": "https://openclaw.ai/protocol.schema.json",
+  "schemaDefinitionCount": 652,
+  "protocolVersion": 4,
+  "minimumNodeProtocolVersion": 3,
+  "releaseReady": false
+}

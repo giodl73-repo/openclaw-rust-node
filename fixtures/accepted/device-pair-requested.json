@@ -1,0 +1,13 @@
+{
+  "type": "event",
+  "event": "device.pair.requested",
+  "payload": {
+    "requestId": "device-request-1",
+    "deviceId": "device-1",
+    "publicKey": "ed25519-public-key",
+    "displayName": "Rust fixture",
+    "platform": "linux",
+    "role": "node",
+    "ts": 1785268800000
+  }
+}

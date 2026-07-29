@@ -1,0 +1,10 @@
+{
+  "type": "event",
+  "event": "node.invoke.input",
+  "payload": {
+    "id": "invoke-1",
+    "nodeId": "node-1",
+    "seq": 0,
+    "payloadJSON": "{\"input\":\"fixture\"}"
+  }
+}
