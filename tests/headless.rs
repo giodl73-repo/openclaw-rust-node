@@ -48,6 +48,32 @@ async fn headless_host_serves_status_readiness_and_graceful_shutdown() {
     server.await.unwrap();
 }
 
+#[tokio::test]
+async fn cancelling_host_releases_health_listener() {
+    let gateway_address = unused_loopback_address().await;
+    let health_address = unused_loopback_address().await;
+    let temporary = TempDir::new().unwrap();
+    let config_path = temporary.path().join("node.json");
+    write_config(&config_path, gateway_address, health_address);
+    let config = HostConfig::load(&config_path).unwrap();
+    let credentials = HostCredentials::new(
+        NodeIdentity::from_secret_bytes([8; 32]),
+        ConnectAuth::token("test-token"),
+    );
+    let host = tokio::spawn(run_host(config, credentials, std::future::pending()));
+
+    let health = health_get(health_address, "/healthz").await;
+    assert!(health.starts_with("HTTP/1.1 200 OK"), "{health}");
+
+    host.abort();
+    assert!(host.await.unwrap_err().is_cancelled());
+    let rebound = tokio::time::timeout(Duration::from_secs(1), TcpListener::bind(health_address))
+        .await
+        .expect("cancelled host should promptly release its health listener")
+        .expect("cancelled host must not leave the health listener detached");
+    drop(rebound);
+}
+
 async fn run_gateway(gateway: TcpListener, result_tx: oneshot::Sender<()>) {
     let (tcp, _) = gateway.accept().await.unwrap();
     let mut socket = accept_async(tcp).await.unwrap();

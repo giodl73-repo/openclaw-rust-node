@@ -18,7 +18,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
 };
 
 use crate::{
@@ -33,6 +33,8 @@ const DEFAULT_AUTH_ENV: &str = "OPENCLAW_NODE_TOKEN";
 const DEFAULT_IDENTITY_SECRET_ENV: &str = "OPENCLAW_NODE_IDENTITY";
 const MAX_CONFIG_FILE_BYTES: u64 = 64 * 1024;
 const MAX_HEALTH_CONNECTIONS: usize = 8;
+const MAX_CONSECUTIVE_HEALTH_ACCEPT_ERRORS: usize = 3;
+const HEALTH_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -217,6 +219,8 @@ pub enum HostError {
     IdentitySecret(String),
     #[error("failed to bind the local health listener: {0}")]
     HealthBind(String),
+    #[error("local health listener failed: {0}")]
+    HealthServe(String),
     #[error("command runtime configuration failed: {0}")]
     RuntimeBuild(#[from] RuntimeBuildError),
     #[error("node reconnect paused: {0}")]
@@ -226,6 +230,26 @@ pub enum HostError {
 #[derive(Default)]
 struct HostState {
     ready: AtomicBool,
+}
+
+struct AbortOnDropTask<T> {
+    handle: JoinHandle<T>,
+}
+
+impl<T> AbortOnDropTask<T> {
+    fn new(handle: JoinHandle<T>) -> Self {
+        Self { handle }
+    }
+
+    fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+impl<T> Drop for AbortOnDropTask<T> {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
 }
 
 /// Run the generic node host in the foreground until shutdown or a terminal
@@ -248,11 +272,28 @@ where
     let state = Arc::new(HostState::default());
     let runtime = build_runtime(&config, &state)?;
     let health_state = Arc::clone(&state);
-    let health_task = tokio::spawn(async move { serve_health(listener, health_state).await });
-    let result = run_connections(config, credentials, runtime, state, shutdown).await;
-    health_task.abort();
-    let _ = health_task.await;
-    result
+    let mut health_task = AbortOnDropTask::new(tokio::spawn(async move {
+        serve_health(listener, health_state).await
+    }));
+    let mut connections = Box::pin(run_connections(
+        config,
+        credentials,
+        runtime,
+        state,
+        shutdown,
+    ));
+    tokio::select! {
+        result = &mut connections => {
+            health_task.abort();
+            let _ = (&mut health_task.handle).await;
+            result
+        }
+        health_result = &mut health_task.handle => match health_result {
+            Ok(Ok(never)) => match never {},
+            Ok(Err(error)) => Err(HostError::HealthServe(error.to_string())),
+            Err(error) => Err(HostError::HealthServe(error.to_string())),
+        },
+    }
 }
 
 async fn run_connections<F>(
@@ -422,14 +463,37 @@ where
     }
 }
 
-async fn serve_health(listener: TcpListener, state: Arc<HostState>) {
+async fn serve_health(
+    listener: TcpListener,
+    state: Arc<HostState>,
+) -> Result<Infallible, std::io::Error> {
     let permits = Arc::new(Semaphore::new(MAX_HEALTH_CONNECTIONS));
     let mut requests = JoinSet::new();
+    let mut consecutive_accept_errors = 0;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let Ok((stream, _peer)) = accepted else {
-                    return;
+                let (stream, _peer) = match accepted {
+                    Ok(accepted) => {
+                        consecutive_accept_errors = 0;
+                        accepted
+                    }
+                    Err(error) => {
+                        consecutive_accept_errors += 1;
+                        emit(
+                            "warn",
+                            "health.accept_failed",
+                            json!({
+                                "attempt": consecutive_accept_errors,
+                                "errorClass": error.kind().to_string(),
+                            }),
+                        );
+                        if consecutive_accept_errors >= MAX_CONSECUTIVE_HEALTH_ACCEPT_ERRORS {
+                            return Err(error);
+                        }
+                        tokio::time::sleep(HEALTH_ACCEPT_RETRY_DELAY).await;
+                        continue;
+                    }
                 };
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                     emit("warn", "health.saturated", json!({"limit": MAX_HEALTH_CONNECTIONS}));
