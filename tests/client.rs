@@ -108,6 +108,40 @@ async fn generic_client_connects_publishes_events_and_correlates_requests() {
 }
 
 #[tokio::test]
+async fn established_session_preserves_invalid_frame_classification() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"invalid-frame-nonce"}}),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":connect["id"],"ok":true,"payload":{"type":"hello-ok","protocol":4}}),
+        )
+        .await;
+        socket.send(Message::Text("{".into())).await.unwrap();
+    });
+
+    let session = NodeClient::connect(
+        NodeClientConfig::new(format!("ws://{address}")),
+        |_nonce| async { Ok::<_, io::Error>(NodeConnectOptions::new("test", "test")) },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        session.wait_closed().await,
+        Err(ClientError::InvalidFrame(_))
+    ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn declarations_are_withheld_until_the_embedding_activates_them() {
     for (activate, expected_surface) in [(false, false), (true, true)] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

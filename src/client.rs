@@ -570,7 +570,7 @@ pub struct NodeSession {
     event_tx: broadcast::Sender<Event>,
     event_rx: Arc<Mutex<broadcast::Receiver<Event>>>,
     invocation_rx: Arc<Mutex<broadcast::Receiver<(Event, Instant)>>>,
-    closed_rx: watch::Receiver<Option<String>>,
+    closed_rx: watch::Receiver<Option<SessionCloseCause>>,
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
     in_flight: Arc<Semaphore>,
@@ -733,8 +733,8 @@ impl NodeSession {
     pub async fn wait_closed(&self) -> Result<(), ClientError> {
         let mut closed = self.closed_rx.clone();
         loop {
-            if let Some(reason) = closed.borrow().clone() {
-                return Err(ClientError::Closed(reason));
+            if let Some(reason) = closed.borrow().as_ref() {
+                return Err(reason.to_client_error());
             }
             if closed.changed().await.is_err() {
                 return Err(ClientError::Closed("session task ended".into()));
@@ -743,12 +743,36 @@ impl NodeSession {
     }
 
     fn closed_error(&self) -> ClientError {
-        ClientError::Closed(
-            self.closed_rx
-                .borrow()
-                .clone()
-                .unwrap_or_else(|| "session task ended".into()),
+        self.closed_rx.borrow().as_ref().map_or_else(
+            || ClientError::Closed("session task ended".into()),
+            SessionCloseCause::to_client_error,
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SessionCloseCause {
+    Closed(String),
+    InvalidFrame(String),
+    Transport(String),
+}
+
+impl SessionCloseCause {
+    fn to_client_error(&self) -> ClientError {
+        match self {
+            Self::Closed(reason) => ClientError::Closed(reason.clone()),
+            Self::InvalidFrame(reason) => ClientError::InvalidFrame(reason.clone()),
+            Self::Transport(reason) => ClientError::Transport(reason.clone()),
+        }
+    }
+
+    fn pending_request_error(&self, method: &str) -> ClientError {
+        let suffix = format!("; request {method} did not complete");
+        match self {
+            Self::Closed(reason) => ClientError::Closed(format!("{reason}{suffix}")),
+            Self::InvalidFrame(reason) => ClientError::InvalidFrame(format!("{reason}{suffix}")),
+            Self::Transport(reason) => ClientError::Transport(format!("{reason}{suffix}")),
+        }
     }
 }
 
@@ -895,7 +919,7 @@ async fn run_session<S>(
     mut cancellations: mpsc::UnboundedReceiver<String>,
     events: broadcast::Sender<Event>,
     invocations: broadcast::Sender<(Event, Instant)>,
-    closed: watch::Sender<Option<String>>,
+    closed: watch::Sender<Option<SessionCloseCause>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -915,7 +939,7 @@ async fn run_session<S>(
                     }
                     Some(SessionCommand::Close) | None => {
                         let _ = socket.close(None).await;
-                        break "closed by client".to_owned();
+                        break SessionCloseCause::Closed("closed by client".into());
                     }
                 }
             }
@@ -935,27 +959,33 @@ async fn run_session<S>(
                                     let _ = reply.send(response_result(&method, ok, payload, error));
                                 }
                             }
-                            Err(error) => break format!("invalid Gateway frame: {error}"),
+                            Err(error) => {
+                                break SessionCloseCause::InvalidFrame(error.to_string());
+                            }
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {
-                        if socket.send(Message::Pong(payload)).await.is_err() {
-                            break "failed to answer Gateway ping".into();
+                        if let Err(error) = socket.send(Message::Pong(payload)).await {
+                            break SessionCloseCause::Transport(error.to_string());
                         }
                     }
-                    Some(Ok(Message::Close(frame))) => break format_close(frame.as_ref()),
+                    Some(Ok(Message::Close(frame))) => {
+                        break SessionCloseCause::Closed(format_close(frame.as_ref()));
+                    }
                     Some(Ok(Message::Binary(_) | Message::Pong(_) | Message::Frame(_))) => {}
-                    Some(Err(error)) => break error.to_string(),
-                    None => break "Gateway ended the WebSocket stream".into(),
+                    Some(Err(error)) => break SessionCloseCause::Transport(error.to_string()),
+                    None => {
+                        break SessionCloseCause::Closed(
+                            "Gateway ended the WebSocket stream".into(),
+                        );
+                    }
                 }
             }
         }
     };
 
     for (_, (method, reply)) in pending {
-        let _ = reply.send(Err(ClientError::Closed(format!(
-            "{close_reason}; request {method} did not complete"
-        ))));
+        let _ = reply.send(Err(close_reason.pending_request_error(&method)));
     }
     let _ = closed.send(Some(close_reason));
 }
