@@ -211,6 +211,19 @@ handler work, and gives runtime cleanup a bounded shutdown window. On Unix,
 `SIGTERM` follows the same path. Service
 files, artifact signing, installation, and publication remain R8 work.
 
+## Package acceptance
+
+The `Package acceptance` workflow builds the release binary natively on Linux
+x64, Windows x64, and macOS ARM64. Each job stages the binary with the license
+and README, creates a platform archive and SHA-256 checksum, extracts that
+archive into a clean directory, and runs the packaged binary's `--version` and
+`--help` paths before retaining the files as short-lived workflow artifacts.
+
+These CI artifacts are package-acceptance evidence, not releases. They are not
+published, signed, attested, supported, or suitable for redistribution. SBOM,
+provenance, service installation, rollback, and release ownership remain
+separate R8 gates.
+
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
 and the pinned beta does not publish every required node event payload.

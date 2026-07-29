@@ -1,0 +1,112 @@
+name: Package acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: package (${{ matrix.artifact }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            artifact: openclaw-node-x86_64-unknown-linux-gnu
+            binary: target/release/openclaw-node
+          - runner: windows-2025
+            artifact: openclaw-node-x86_64-pc-windows-msvc
+            binary: target/release/openclaw-node.exe
+          - runner: macos-15
+            artifact: openclaw-node-aarch64-apple-darwin
+            binary: target/release/openclaw-node
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+
+      - name: Build release binary
+        run: cargo build --release --locked --bin openclaw-node
+
+      - name: Package and smoke Unix artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ARCHIVE_BASENAME: ${{ matrix.artifact }}
+          BINARY_PATH: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          stage="dist/${ARCHIVE_BASENAME}"
+          mkdir -p "$stage"
+          install -m 0755 "$BINARY_PATH" "$stage/openclaw-node"
+          cp LICENSE README.md "$stage/"
+          tar -C dist -czf "dist/${ARCHIVE_BASENAME}.tar.gz" "$ARCHIVE_BASENAME"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${ARCHIVE_BASENAME}.tar.gz" > "${ARCHIVE_BASENAME}.tar.gz.sha256")
+            (cd dist && sha256sum -c "${ARCHIVE_BASENAME}.tar.gz.sha256")
+          else
+            digest="$(shasum -a 256 "dist/${ARCHIVE_BASENAME}.tar.gz" | awk '{print $1}')"
+            printf '%s  %s\n' "$digest" "${ARCHIVE_BASENAME}.tar.gz" > "dist/${ARCHIVE_BASENAME}.tar.gz.sha256"
+            actual="$(shasum -a 256 "dist/${ARCHIVE_BASENAME}.tar.gz" | awk '{print $1}')"
+            test "$actual" = "$digest"
+          fi
+          mkdir -p smoke
+          tar -C smoke -xzf "dist/${ARCHIVE_BASENAME}.tar.gz"
+          package_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -er '[.packages[] | select(.name == "openclaw-node")] | if length == 1 then .[0].version else error("expected one openclaw-node package") end'
+          )"
+          test "$("smoke/${ARCHIVE_BASENAME}/openclaw-node" --version)" = "openclaw-node ${package_version}"
+          "smoke/${ARCHIVE_BASENAME}/openclaw-node" --help | grep -F "Usage: openclaw-node --config <path>"
+
+      - name: Package and smoke Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE_BASENAME: ${{ matrix.artifact }}
+          BINARY_PATH: ${{ matrix.binary }}
+        run: |
+          $stage = Join-Path "dist" $env:ARCHIVE_BASENAME
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath $env:BINARY_PATH -Destination (Join-Path $stage "openclaw-node.exe")
+          Copy-Item -LiteralPath "LICENSE", "README.md" -Destination $stage
+          $archive = Join-Path "dist" "$($env:ARCHIVE_BASENAME).zip"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          $checksum = Join-Path "dist" "$($env:ARCHIVE_BASENAME).zip.sha256"
+          "$digest  $($env:ARCHIVE_BASENAME).zip" | Set-Content -Encoding ascii -LiteralPath $checksum
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $digest) { throw "packaged artifact checksum mismatch" }
+          Expand-Archive -LiteralPath $archive -DestinationPath "smoke"
+          $packagedBinary = Join-Path "smoke" "$($env:ARCHIVE_BASENAME)\openclaw-node.exe"
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $packages = @($metadata.packages | Where-Object { $_.name -eq "openclaw-node" })
+          if ($packages.Count -ne 1) { throw "expected one openclaw-node package" }
+          $expectedVersion = "openclaw-node $($packages[0].version)"
+          if ((& $packagedBinary --version) -ne $expectedVersion) {
+            throw "packaged binary version smoke failed"
+          }
+          if (-not ((& $packagedBinary --help) -match "Usage: openclaw-node --config <path>")) {
+            throw "packaged binary help smoke failed"
+          }
+
+      - name: Upload accepted package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
