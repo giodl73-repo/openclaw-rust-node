@@ -173,6 +173,44 @@ The typed dispatch primitive remains usable directly by embeddings that want
 to own runtime policy themselves. The next lifecycle layer is streaming input,
 progress, and wire cancellation only after its OpenClaw contracts are released.
 
+## Experimental headless host
+
+The `openclaw-node` binary is a generic foreground wrapper around the same
+client and bounded runtime. It is intentionally not a service installer and it
+does not register any OpenClaw-owned `system.*` command. Its only handler is a
+configurable custom status command.
+
+Start from [`examples/headless-config.json`](examples/headless-config.json).
+The JSON file contains no secret values: `authEnv` names the environment
+variable holding the Gateway credential, and `identitySecretEnv` names the
+variable holding the stable 32-byte Ed25519 secret injected by the operator's
+secret store. The identity value may contain unpadded base64url. This R7 host
+does not claim to provide a hardened platform credential-file implementation;
+platform credential persistence and permissions remain R8 work.
+
+```console
+$ export OPENCLAW_NODE_TOKEN='<gateway credential>'
+$ export OPENCLAW_NODE_IDENTITY='<32-byte secret as unpadded base64url>'
+$ cargo run --bin openclaw-node -- --config examples/headless-config.json
+```
+
+The process stays in the foreground, emits one redacted JSON diagnostic per
+line on stderr, retries transient transport failures with bounded backoff, and
+exits on terminal authentication, pairing, protocol, identity, or
+configuration pauses. Approve device pairing and the separately pending node
+command surface through OpenClaw, then restart after a terminal pairing pause.
+
+The loopback-only HTTP listener exposes:
+
+- `GET /healthz`: process health;
+- `GET /readyz`: `200` only while an activated Gateway session is serving the
+  bounded command runtime, otherwise `503`.
+
+`Ctrl-C` first withdraws readiness, closes the Gateway session, cancels owned
+handler work, and gives runtime cleanup a bounded shutdown window. On Unix,
+`SIGTERM` follows the same path. Service
+files, artifact signing, installation, and publication remain R8 work.
+
 The current immutable pin is deliberately marked `releaseReady: false` because
 the registry has no stable calendar release of `@openclaw/gateway-protocol` yet
 and the pinned beta does not publish every required node event payload.
