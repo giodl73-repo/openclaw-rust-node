@@ -218,10 +218,16 @@ x64, Windows x64, and macOS ARM64. Each job stages the binary with the license
 and README, creates a platform archive and SHA-256 checksum, extracts that
 archive into a clean directory, and runs the packaged binary's `--version` and
 `--help` paths before retaining the files as short-lived workflow artifacts.
+Eligible same-repository and `main` runs then use GitHub OIDC to bind signed
+SLSA build provenance to the exact accepted archive. Untrusted fork pull
+requests and Dependabot pull requests still build and smoke packages but do not
+receive privileged attestation credentials.
 
 These CI artifacts are package-acceptance evidence, not releases. They are not
-published, signed, attested, supported, or suitable for redistribution. SBOM,
-provenance, service installation, rollback, and release ownership remain
+published, code-signed, supported, or suitable for redistribution. A provenance
+attestation proves the archive digest and producing GitHub workflow identity;
+it does not confer release status or platform publisher identity. Attaching the
+SBOM to a package, service installation, rollback, and release ownership remain
 separate R8 gates.
 
 ## Supply-chain evidence
