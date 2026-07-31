@@ -32,6 +32,30 @@ workspace:
 cargo test --manifest-path crates/Cargo.toml --workspace --locked
 ```
 
+## Repository boundaries
+
+This repository is the incubation and exchange point for one shared Rust
+runtime and its product adopters. It does not keep separate OpenClaw and
+Microsoft copies of that runtime:
+
+- [`crates/`](crates/) and the consumed [`test/fixtures/`](test/fixtures/)
+  contain the generic implementation and conformance contracts that can
+  round-trip with `openclaw/openclaw`;
+- [`integrations/edge-chromium/`](integrations/edge-chromium/) contains only
+  Edge/Chromium-owned adapters, deployment, IPC, supervision, credential, and
+  product-policy integration;
+- [`tests/cross-repo/`](tests/cross-repo/) proves that a pinned shared-runtime
+  revision works through a product adapter without becoming the owner of
+  either side.
+
+Edge/Chromium consumes the shared crates; it does not fork them. During
+incubation it may take an exact reviewed source drop from this repository.
+After OpenClaw chooses an official distribution mechanism, adopters should pin
+that supported artifact or source revision instead.
+
+See [REPOSITORY_LAYOUT.md](REPOSITORY_LAYOUT.md) for ownership, dependency, and
+change-routing rules.
+
 ## Goal
 
 Provide a reusable Rust implementation of the existing OpenClaw node contract

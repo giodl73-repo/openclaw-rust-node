@@ -31,6 +31,13 @@ remains authoritative for the crates and fixtures. Changes intended for the
 shared implementation should be proposed upstream first, then synchronized
 here from an exact reviewed commit.
 
+The snapshot is the single shared runtime consumed by product integrations;
+adopters do not maintain downstream copies with product-specific patches.
+Microsoft-owned integration belongs under `integrations/edge-chromium/`, and
+black-box composition evidence belongs under `tests/cross-repo/`. See
+[`REPOSITORY_LAYOUT.md`](REPOSITORY_LAYOUT.md) for the complete synchronization
+contract.
+
 The snapshot includes authenticated framing, negotiation, immutable runtime
 configuration, ordinary-command bridging, lifecycle, admission, cancellation,
 and conformance fixtures. It does not provide production process supervision,
