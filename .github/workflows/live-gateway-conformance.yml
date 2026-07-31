@@ -1,0 +1,70 @@
+name: Live Gateway conformance
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/live-gateway-conformance.yml
+      - crates/**
+      - test/fixtures/**
+      - tests/openclaw-conformance/**
+  workflow_dispatch:
+    inputs:
+      openclaw_ref:
+        description: Exact OpenClaw branch, tag, or commit to validate
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Rust node candidate
+        uses: actions/checkout@v4
+        with:
+          path: rust-node
+
+      - name: Check out OpenClaw
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ inputs.openclaw_ref || 'main' }}
+          path: openclaw
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: openclaw/pnpm-lock.yaml
+
+      - name: Install and build OpenClaw
+        working-directory: openclaw
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93"
+
+      - name: Run isolated live Gateway conformance
+        env:
+          OPENCLAW_CHECKOUT: ${{ github.workspace }}/openclaw
+        run: bash rust-node/tests/openclaw-conformance/run-isolated-gateway.sh
+
+      - name: Record exact revisions
+        if: always()
+        run: |
+          echo "Rust node: $(git -C rust-node rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "OpenClaw: $(git -C openclaw rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

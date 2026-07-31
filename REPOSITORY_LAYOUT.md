@@ -16,6 +16,7 @@ openclaw-rust-node/
 ├── integrations/
 │   └── edge-chromium/
 ├── tests/
+│   ├── openclaw-conformance/
 │   └── cross-repo/
 └── src/, protocol/, fixtures/, examples/, rfcs/
 ```
@@ -31,6 +32,7 @@ use `crates/`; the prototype is not another supported runtime.
 | `crates/` | Generic Gateway session, node lifecycle, bounded runtime, foreground host, and sidecar contracts | `openclaw/openclaw` | Microsoft product names, platform deployment, native command implementations, product policy |
 | `test/fixtures/` | Language-neutral wire and lifecycle conformance vectors consumed by the shared crates | `openclaw/openclaw` | Product-only payloads or credentials |
 | `integrations/edge-chromium/` | Edge/Chromium adapters, local IPC selection, credential-store binding, process supervision, native handlers, telemetry, rollout, and rollback | Microsoft Edge/Chromium repositories | Forked Gateway protocol, copied runtime logic, changes to OpenClaw command semantics |
+| `tests/openclaw-conformance/` | Product-neutral black-box tests of an exact shared-runtime snapshot against OpenClaw | `openclaw/openclaw` | Product adapters, production code, or persisted credentials |
 | `tests/cross-repo/` | Black-box proof across a pinned shared runtime and a product adapter | Evidence may inform both organizations | Production implementation or independent protocol authority |
 
 OpenClaw remains authoritative for Gateway schemas, authentication, pairing,
@@ -96,6 +98,9 @@ Route a change by asking who owns the behavior:
 - Proof that a particular runtime revision works with a particular adapter:
   change `tests/cross-repo/`, pin both revisions, and publish only redacted
   evidence.
+- Product-neutral live Gateway proof that is not yet part of the exact
+  OpenClaw snapshot: change `tests/openclaw-conformance/` and promote it
+  upstream before moving it into the synchronized crate tree.
 
 If a change appears to require edits on both production sides, split it into a
 generic contract/runtime change and an adopter change. Land or pin the generic

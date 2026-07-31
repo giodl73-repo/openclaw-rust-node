@@ -35,6 +35,10 @@ jobs:
       - run: cargo doc --manifest-path crates/Cargo.toml --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      - run: cargo fmt --manifest-path tests/openclaw-conformance/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path tests/openclaw-conformance/Cargo.toml --locked
+      - run: cargo clippy --manifest-path tests/openclaw-conformance/Cargo.toml --all-targets --locked -- -D warnings
+      - run: bash -n tests/openclaw-conformance/run-isolated-gateway.sh
 
   protocol-pin:
     runs-on: ubuntu-latest
