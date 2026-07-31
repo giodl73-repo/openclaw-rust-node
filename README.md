@@ -7,6 +7,31 @@ Experimental Rust node client and headless node host for the
 > This is an experimental working client, not an official OpenClaw component.
 > Its API and protocol compatibility are not yet stable.
 
+## OpenClaw implementation snapshot
+
+The [`crates/`](crates/) workspace mirrors the two unpublished crates currently
+proposed to the OpenClaw monorepo:
+
+- `openclaw-gateway-client`: the role-neutral Gateway transport and session;
+- `openclaw-node-host`: the bounded node lifecycle, runtime, foreground host,
+  and authenticated sidecar contracts.
+
+The snapshot is taken from cumulative OpenClaw draft PR
+[#116863](https://github.com/openclaw/openclaw/pull/116863) at commit
+`8d0a1b013ea83b1726e284d71791002260eac3c6`. That branch includes foundation
+PR [#116050](https://github.com/openclaw/openclaw/pull/116050), runtime PR
+[#116450](https://github.com/openclaw/openclaw/pull/116450), and the third
+sidecar slice. See [UPSTREAM_SNAPSHOT.md](UPSTREAM_SNAPSHOT.md) for provenance,
+scope, and synchronization rules.
+
+The root `openclaw-node` package remains temporarily as historical prototype
+and package-evidence input. New integration work should target the two-crate
+workspace:
+
+```console
+cargo test --manifest-path crates/Cargo.toml --workspace --locked
+```
+
 ## Goal
 
 Provide a reusable Rust implementation of the existing OpenClaw node contract
@@ -23,7 +48,11 @@ The intended result is:
 OpenClaw remains authoritative for the Gateway schema, pairing model, command
 semantics, and reference behavior.
 
-## Proposed architecture
+## Original prototype architecture
+
+The original single-crate prototype below is retained for historical and
+package-evidence continuity. The synchronized two-crate workspace above is the
+current integration target.
 
 ```text
 @openclaw/gateway-protocol
