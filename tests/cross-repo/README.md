@@ -28,6 +28,8 @@ unless the operator supplies an isolated real Gateway and CLI. It proves:
 - Gateway authentication and challenge-bound node identity;
 - Gateway-owned command-surface approval, accepting either an explicit pending
   request or OpenClaw's trusted first-pair automatic approval;
+- reconnect after pairing so invocation is bound to the approved pairing
+  generation;
 - successful and structured-failure `node.invoke` paths;
 - reconnect with the Gateway-issued device token; and
 - fail-closed classification of an invalid device token.

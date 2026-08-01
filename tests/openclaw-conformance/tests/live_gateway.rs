@@ -39,20 +39,12 @@ async fn real_gateway_pairing_approval_invocation_and_reconnect() {
 
     let cli = LiveCli::new(&environment, device_id.clone());
     let approval_path = cli.approve_command_surface_if_pending();
-
-    let first_runtime = tokio::spawn({
-        let runtime = runtime.clone();
-        let session = first.clone();
-        async move { runtime.run(session).await }
-    });
-    cli.assert_success_and_structured_failure().await;
     first.close().await;
     let _ = first.wait_closed().await;
-    assert!(
-        first_runtime.await.expect("join first runtime").is_err(),
-        "closed session should terminate the command runtime"
-    );
 
+    // Pairing changes the Gateway-owned approved surface. A fresh connection
+    // binds invocation to that approved generation; the pre-approval session
+    // must not be reused for work.
     let reconnected = connect(
         &environment.gateway_url,
         ConnectAuth::device_token(issued_device_token),
@@ -67,7 +59,7 @@ async fn real_gateway_pairing_approval_invocation_and_reconnect() {
         let session = reconnected.clone();
         async move { runtime.run(session).await }
     });
-    cli.assert_status().await;
+    cli.assert_success_and_structured_failure().await;
     reconnected.close().await;
     let _ = reconnected.wait_closed().await;
     assert!(
