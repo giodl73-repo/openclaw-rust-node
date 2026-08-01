@@ -54,3 +54,15 @@ this proof at a normal user Gateway or persist its generated node identity.
 
 Product-adapter tests should invoke this shared proof or consume its result;
 they should not copy its Gateway and runtime logic into the adopter tree.
+
+## Windows adopter composition
+
+`windows-node/` pins the validated shared-runtime revision and the independent
+Windows sidecar-adapter revision. Its PowerShell harness compares the three
+OpenClaw-owned sidecar corpora by Git blob, runs the complete shared Rust
+workspace, and runs the focused Windows `RustSidecar` suite. The hosted lane
+uses Windows because the adopter is a .NET Windows product repository.
+
+This closes revision and contract-composition ambiguity only. It does not
+launch or select Rust in the Windows product; process, bootstrap, IPC,
+supervision, audit, rollout, and rollback remain separate adoption gates.
