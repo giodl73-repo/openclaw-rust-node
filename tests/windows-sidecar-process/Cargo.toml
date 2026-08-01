@@ -1,0 +1,22 @@
+[package]
+name = "openclaw-windows-sidecar-process-probe"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[dependencies]
+base64 = "0.22.1"
+openclaw-node-host = { path = "../../crates/openclaw-node-host" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[workspace]
