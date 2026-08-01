@@ -29,6 +29,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$test_root/home" "$test_root/state"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export HOME="$test_root/home"
 export OPENCLAW_STATE_DIR="$test_root/state"
 export OPENCLAW_CONFIG_PATH="$test_root/state/openclaw.json"
