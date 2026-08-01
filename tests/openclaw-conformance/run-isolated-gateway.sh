@@ -36,6 +36,17 @@ export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 export OPENCLAW_GATEWAY_PORT="$(node -e 'const net=require("node:net");const server=net.createServer();server.listen(0,"127.0.0.1",()=>{console.log(server.address().port);server.close();});')"
 export OPENCLAW_GATEWAY_URL="ws://127.0.0.1:$OPENCLAW_GATEWAY_PORT"
 export OPENCLAW_CLI="$openclaw_cli"
+export OPENCLAW_SKIP_CHANNELS=1
+export OPENCLAW_SKIP_PROVIDERS=1
+export OPENCLAW_SKIP_GMAIL_WATCHER=1
+export OPENCLAW_SKIP_CRON=1
+export OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1
+export OPENCLAW_SKIP_CANVAS_HOST=1
+export OPENCLAW_TEST_MINIMAL_GATEWAY=1
+export VITEST=1
+
+printf '{"gateway":{"mode":"local","port":%s,"auth":{"mode":"token"},"controlUi":{"enabled":false}}}\n' \
+  "$OPENCLAW_GATEWAY_PORT" >"$OPENCLAW_CONFIG_PATH"
 
 node "$openclaw_cli" gateway run \
   --bind loopback \
