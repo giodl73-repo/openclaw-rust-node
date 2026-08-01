@@ -508,9 +508,9 @@ dependencies = [
 name = "openclaw-windows-sidecar-process-probe"
 version = "0.0.0"
 dependencies = [
- "base64",
  "openclaw-node-host",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
