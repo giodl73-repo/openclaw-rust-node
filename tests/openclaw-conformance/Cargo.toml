@@ -1,0 +1,21 @@
+[package]
+name = "openclaw-rust-node-conformance"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[dev-dependencies]
+openclaw-node-host = { path = "../../crates/openclaw-node-host" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[workspace]

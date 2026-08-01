@@ -44,6 +44,9 @@ Microsoft copies of that runtime:
 - [`integrations/edge-chromium/`](integrations/edge-chromium/) contains only
   Edge/Chromium-owned adapters, deployment, IPC, supervision, credential, and
   product-policy integration;
+- [`tests/openclaw-conformance/`](tests/openclaw-conformance/) holds generic
+  live-Gateway tests while they incubate for upstream promotion without
+  changing the byte-exact crate snapshot;
 - [`tests/cross-repo/`](tests/cross-repo/) proves that a pinned shared-runtime
   revision works through a product adapter without becoming the owner of
   either side.

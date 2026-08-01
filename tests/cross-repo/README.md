@@ -11,3 +11,46 @@ Suitable proofs include pairing and capability approval, invocation,
 readiness, reconnect, cancellation, bounded overload, process supervision,
 upgrade, and rollback. Product source code belongs in its integration area;
 generic runtime tests and fixtures belong beside the shared crates.
+
+## Shared-runtime live Gateway proof
+
+The first proof is deliberately product-neutral and lives in a standalone
+package that depends on the synchronized node-host crate by path:
+
+```text
+tests/openclaw-conformance/tests/live_gateway.rs
+```
+
+This preserves the byte-exact OpenClaw snapshot while the test incubates. The
+test is compiled by the ordinary validation gate and ignored at execution time
+unless the operator supplies an isolated real Gateway and CLI. It proves:
+
+- Gateway authentication and challenge-bound node identity;
+- Gateway-owned command-surface approval, accepting either an explicit pending
+  request or OpenClaw's trusted first-pair automatic approval;
+- reconnect after pairing so invocation is bound to the approved pairing
+  generation;
+- successful and structured-failure `node.invoke` paths;
+- reconnect with the Gateway-issued device token; and
+- fail-closed classification of an invalid device token.
+
+The disposable Gateway allowlists only the two neutral conformance commands.
+This exercises OpenClaw's explicit custom-command opt-in without weakening the
+default command policy.
+
+Run it only against disposable Gateway state:
+
+```console
+OPENCLAW_GATEWAY_URL=ws://127.0.0.1:<port> \
+OPENCLAW_GATEWAY_TOKEN=<ephemeral-test-token> \
+OPENCLAW_CLI=/absolute/path/to/openclaw.mjs \
+cargo test --manifest-path tests/openclaw-conformance/Cargo.toml \
+  --locked --test live_gateway -- --ignored --nocapture
+```
+
+On Windows, set the same process-local environment variables in PowerShell;
+`OPENCLAW_NODE_EXE` may override the default `node` executable. Do not point
+this proof at a normal user Gateway or persist its generated node identity.
+
+Product-adapter tests should invoke this shared proof or consume its result;
+they should not copy its Gateway and runtime logic into the adopter tree.
