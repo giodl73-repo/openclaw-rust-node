@@ -32,3 +32,8 @@ The runner creates disposable Gateway state and credentials, selects a free
 loopback port, applies the same minimal channel/provider environment as
 OpenClaw's process-level E2E helper, stops the Gateway on exit, and prints
 sanitized failure logs. It must not be pointed at a normal user Gateway.
+
+The disposable configuration explicitly allowlists only the two neutral
+conformance commands. OpenClaw otherwise filters custom commands out of the
+approval surface, so the proof preserves the production fail-closed policy
+while exercising the operator opt-in and approval path.

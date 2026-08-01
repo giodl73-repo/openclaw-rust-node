@@ -47,7 +47,7 @@ export OPENCLAW_SKIP_CANVAS_HOST=1
 export OPENCLAW_TEST_MINIMAL_GATEWAY=1
 export VITEST=1
 
-printf '{"gateway":{"mode":"local","port":%s,"auth":{"mode":"token"},"controlUi":{"enabled":false}}}\n' \
+printf '{"gateway":{"mode":"local","port":%s,"auth":{"mode":"token"},"controlUi":{"enabled":false},"nodes":{"commands":{"allow":["rust-node.conformance.status","rust-node.conformance.fail"]}}}}\n' \
   "$OPENCLAW_GATEWAY_PORT" >"$OPENCLAW_CONFIG_PATH"
 
 node "$openclaw_cli" gateway run \

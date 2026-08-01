@@ -34,6 +34,10 @@ unless the operator supplies an isolated real Gateway and CLI. It proves:
 - reconnect with the Gateway-issued device token; and
 - fail-closed classification of an invalid device token.
 
+The disposable Gateway allowlists only the two neutral conformance commands.
+This exercises OpenClaw's explicit custom-command opt-in without weakening the
+default command policy.
+
 Run it only against disposable Gateway state:
 
 ```console
