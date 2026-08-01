@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: giodl73-repo/openclaw-windows-node
-          ref: 6b03567a2420256f7a1ffbf60eaa05ed6d18872a
+          ref: 199eaa1fcba42a436a7e6dcfa8581411e523f59f
           path: windows-node
           fetch-depth: 0
 

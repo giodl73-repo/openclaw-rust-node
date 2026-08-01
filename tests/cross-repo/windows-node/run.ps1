@@ -139,9 +139,16 @@ if (-not $SkipTests) {
     )
     $probePath = Join-Path (Split-Path -Parent $probeManifest) `
         "target/debug/openclaw-windows-sidecar-process-probe.exe"
+    $reparseRoot = Join-Path ([IO.Path]::GetTempPath()) `
+        ("openclaw-sidecar-reparse-" + [guid]::NewGuid().ToString("N"))
+    $null = New-Item -ItemType Junction -Path $reparseRoot `
+        -Target (Split-Path -Parent $probePath)
     $previousProbe = $env:OPENCLAW_RUST_SIDECAR_PROBE
+    $previousReparseProbe = $env:OPENCLAW_RUST_SIDECAR_REPARSE_PROBE
     try {
         $env:OPENCLAW_RUST_SIDECAR_PROBE = $probePath
+        $env:OPENCLAW_RUST_SIDECAR_REPARSE_PROBE = `
+            Join-Path $reparseRoot (Split-Path -Leaf $probePath)
         Invoke-Checked -Executable "dotnet" -WorkingDirectory $windowsRoot -Arguments @(
             "test",
             (Join-Path $windowsRoot "tests/OpenClaw.Shared.Tests/OpenClaw.Shared.Tests.csproj"),
@@ -150,6 +157,10 @@ if (-not $SkipTests) {
     }
     finally {
         $env:OPENCLAW_RUST_SIDECAR_PROBE = $previousProbe
+        $env:OPENCLAW_RUST_SIDECAR_REPARSE_PROBE = $previousReparseProbe
+        if (Test-Path -LiteralPath $reparseRoot) {
+            Remove-Item -LiteralPath $reparseRoot -Force
+        }
     }
 }
 

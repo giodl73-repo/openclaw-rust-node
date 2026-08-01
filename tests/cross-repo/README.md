@@ -64,6 +64,7 @@ workspace, builds the test-only Rust process probe, and runs the focused
 Windows `RustSidecar` suite with that child attached. The hosted lane uses
 Windows because the adopter is a .NET Windows product repository.
 
-This closes revision, contract-composition, and cross-process codec ambiguity.
-It does not select Rust in the Windows product; production bootstrap, IPC,
-supervision, audit, rollout, and rollback remain separate adoption gates.
+This closes revision, contract-composition, cross-process codec, exact artifact
+hash, and private-pipe bootstrap ambiguity. It does not select Rust in the
+Windows product; production signing/distribution, supervision, audit, rollout,
+and rollback remain separate adoption gates.

@@ -13,7 +13,12 @@ The harness requires:
 - all three sidecar fixture blobs to equal their recorded OpenClaw-owned blob;
 - the full shared Rust workspace tests to pass; and
 - the focused Windows `RustSidecar` conformance tests to pass, including a
-  real Rust child-process handshake, configuration, admission, and invocation.
+  real Rust child-process handshake, configuration, admission, and invocation;
+- the Windows launcher to reject an incorrect artifact SHA-256 before launch;
+  and
+- the authenticated handshake artifact identity to match the verified
+  executable, with the one-session key delivered only through the inherited
+  private bootstrap pipe.
 
 Run from PowerShell:
 
@@ -26,6 +31,7 @@ Run from PowerShell:
 Use `-SkipTests` only to audit revision and fixture pins. A complete evidence
 run omits that switch.
 
-This is test-only process composition evidence. It does not select the Rust
-runtime in Windows, provide the production bootstrap or transport, or prove
-production supervision, audit, rollout, and rollback.
+This is test-only process composition evidence using concrete anonymous pipes.
+It does not select the Rust runtime in Windows, define production artifact
+signing/distribution, or prove production supervision, audit, rollout, and
+rollback.
