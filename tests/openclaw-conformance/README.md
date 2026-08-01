@@ -9,6 +9,12 @@ The ignored real-Gateway test proves authentication, challenge-bound node
 identity, command approval, invocation success and structured failure,
 device-token reconnect, and invalid-token failure classification.
 
+OpenClaw may approve a trusted first node's initial capability surface during
+the pairing step. The proof reports whether approval was explicit or trusted
+automatic and requires a successful invocation in either case. A future
+negative fixture should disable trusted auto-approval to prove the pending and
+filtered path independently.
+
 Compile the harness without external services:
 
 ```console
