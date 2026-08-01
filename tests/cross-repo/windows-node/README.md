@@ -12,7 +12,8 @@ The harness requires:
 - both consumed implementation/test surfaces to be free of uncommitted changes;
 - all three sidecar fixture blobs to equal their recorded OpenClaw-owned blob;
 - the full shared Rust workspace tests to pass; and
-- the focused Windows `RustSidecar` conformance tests to pass.
+- the focused Windows `RustSidecar` conformance tests to pass, including a
+  real Rust child-process handshake, configuration, admission, and invocation.
 
 Run from PowerShell:
 
@@ -25,6 +26,6 @@ Run from PowerShell:
 Use `-SkipTests` only to audit revision and fixture pins. A complete evidence
 run omits that switch.
 
-This is contract composition evidence. It does not launch a Rust process,
-select the Rust runtime in Windows, provide protected bootstrap or concrete
-IPC, or prove production rollout and rollback.
+This is test-only process composition evidence. It does not select the Rust
+runtime in Windows, provide the production bootstrap or transport, or prove
+production supervision, audit, rollout, and rollback.

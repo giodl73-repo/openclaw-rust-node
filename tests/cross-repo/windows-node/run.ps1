@@ -76,13 +76,16 @@ function Invoke-Checked {
 
 $sharedCommit = [string]$manifest.sharedRuntime.commit
 $windowsCommit = [string]$manifest.windowsAdopter.commit
+$probeCommit = [string]$manifest.processProbe.commit
+$probeManifest = Join-Path $rustRoot ([string]$manifest.processProbe.manifest)
 $windowsHead = Invoke-GitText -RepositoryRoot $windowsRoot -Arguments @("rev-parse", "HEAD")
 if ($windowsHead -ne $windowsCommit) {
     throw "Windows adopter checkout is $windowsHead; expected exact pin $windowsCommit"
 }
 
 $dirtySharedSurface = Invoke-GitText -RepositoryRoot $rustRoot -Arguments @(
-    "status", "--porcelain", "--untracked-files=all", "--", "crates", "test/fixtures"
+    "status", "--porcelain", "--untracked-files=all", "--",
+    "crates", "test/fixtures", "tests/windows-sidecar-process"
 )
 if ($dirtySharedSurface) {
     throw "Shared crates or fixtures contain uncommitted changes: $dirtySharedSurface"
@@ -102,6 +105,12 @@ Assert-GitSuccess -RepositoryRoot $rustRoot `
 Assert-GitSuccess -RepositoryRoot $rustRoot `
     -Arguments @("diff", "--quiet", $sharedCommit, "HEAD", "--", "crates", "test/fixtures") `
     -FailureMessage "Shared crates or fixtures differ from the validated runtime pin $sharedCommit"
+Assert-GitSuccess -RepositoryRoot $rustRoot `
+    -Arguments @("merge-base", "--is-ancestor", $probeCommit, "HEAD") `
+    -FailureMessage "Rust process-probe pin $probeCommit is not an ancestor of the candidate"
+Assert-GitSuccess -RepositoryRoot $rustRoot `
+    -Arguments @("diff", "--quiet", $probeCommit, "HEAD", "--", "tests/windows-sidecar-process") `
+    -FailureMessage "Rust process probe differs from the validated pin $probeCommit"
 
 $rustFixtureRoot = "test/fixtures"
 $windowsFixtureRoot = "tests/OpenClaw.Shared.Tests/RustSidecar/Fixtures"
@@ -125,11 +134,23 @@ if (-not $SkipTests) {
         "--workspace",
         "--locked"
     )
-    Invoke-Checked -Executable "dotnet" -WorkingDirectory $windowsRoot -Arguments @(
-        "test",
-        (Join-Path $windowsRoot "tests/OpenClaw.Shared.Tests/OpenClaw.Shared.Tests.csproj"),
-        "--filter", "FullyQualifiedName~RustSidecar"
+    Invoke-Checked -Executable "cargo" -WorkingDirectory $rustRoot -Arguments @(
+        "build", "--manifest-path", $probeManifest, "--locked"
     )
+    $probePath = Join-Path (Split-Path -Parent $probeManifest) `
+        "target/debug/openclaw-windows-sidecar-process-probe.exe"
+    $previousProbe = $env:OPENCLAW_RUST_SIDECAR_PROBE
+    try {
+        $env:OPENCLAW_RUST_SIDECAR_PROBE = $probePath
+        Invoke-Checked -Executable "dotnet" -WorkingDirectory $windowsRoot -Arguments @(
+            "test",
+            (Join-Path $windowsRoot "tests/OpenClaw.Shared.Tests/OpenClaw.Shared.Tests.csproj"),
+            "--filter", "FullyQualifiedName~RustSidecar"
+        )
+    }
+    finally {
+        $env:OPENCLAW_RUST_SIDECAR_PROBE = $previousProbe
+    }
 }
 
-Write-Host "cross-repo-conformance shared=$sharedCommit windows=$windowsCommit fixtures=$($manifest.fixtures.Count) tests=$(-not $SkipTests)"
+Write-Host "cross-repo-conformance shared=$sharedCommit windows=$windowsCommit probe=$probeCommit fixtures=$($manifest.fixtures.Count) tests=$(-not $SkipTests)"

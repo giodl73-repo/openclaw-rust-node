@@ -7,6 +7,7 @@ on:
       - crates/**
       - test/fixtures/**
       - tests/cross-repo/windows-node/**
+      - tests/windows-sidecar-process/**
   workflow_dispatch:
 
 permissions:
@@ -26,8 +27,8 @@ jobs:
       - name: Check out pinned Windows adopter
         uses: actions/checkout@v4
         with:
-          repository: openclaw/openclaw-windows-node
-          ref: 3ca913a43a62957b8aca0448667facff3290fbc6
+          repository: giodl73-repo/openclaw-windows-node
+          ref: 6b03567a2420256f7a1ffbf60eaa05ed6d18872a
           path: windows-node
           fetch-depth: 0
 
