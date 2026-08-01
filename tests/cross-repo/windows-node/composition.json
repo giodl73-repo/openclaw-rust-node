@@ -10,7 +10,7 @@
   },
   "windowsAdopter": {
     "repository": "https://github.com/giodl73-repo/openclaw-windows-node",
-    "commit": "67cd91f1e54ea1197270e663caadd5582475e8a1"
+    "commit": "70a378180daac51f5de379c23991bfb9464d4592"
   },
   "processProbe": {
     "commit": "68944edf67b264fd92022aaedc607da3ecbaf0f8",
