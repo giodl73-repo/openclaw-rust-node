@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "sharedRuntime": {
+    "repository": "https://github.com/giodl73-repo/openclaw-rust-node",
+    "commit": "84f879ecf5a40c18094f37b9683340a288873e21"
+  },
+  "upstreamContract": {
+    "repository": "https://github.com/openclaw/openclaw",
+    "commit": "8d0a1b013ea83b1726e284d71791002260eac3c6"
+  },
+  "windowsAdopter": {
+    "repository": "https://github.com/openclaw/openclaw-windows-node",
+    "commit": "3ca913a43a62957b8aca0448667facff3290fbc6"
+  },
+  "fixtures": [
+    {
+      "name": "node-sidecar-protocol-v1.json",
+      "gitBlob": "5081e7321a74d427d1aac4c4de5bb691425f3ba3"
+    },
+    {
+      "name": "node-sidecar-handshake-v1.json",
+      "gitBlob": "0b22c949fa53078106f6c7196f0c07f2fa1c0504"
+    },
+    {
+      "name": "node-sidecar-runtime-v1.json",
+      "gitBlob": "33c1435763ad9e5edb1149d56bc88ad6bab34f00"
+    }
+  ]
+}
