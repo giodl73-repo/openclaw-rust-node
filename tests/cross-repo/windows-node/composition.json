@@ -10,10 +10,10 @@
   },
   "windowsAdopter": {
     "repository": "https://github.com/giodl73-repo/openclaw-windows-node",
-    "commit": "6b03567a2420256f7a1ffbf60eaa05ed6d18872a"
+    "commit": "67cd91f1e54ea1197270e663caadd5582475e8a1"
   },
   "processProbe": {
-    "commit": "4549890da66f7853c8430c1e758aebfc44d1d488",
+    "commit": "68944edf67b264fd92022aaedc607da3ecbaf0f8",
     "manifest": "tests/windows-sidecar-process/Cargo.toml"
   },
   "fixtures": [
