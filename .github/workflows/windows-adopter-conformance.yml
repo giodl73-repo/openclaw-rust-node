@@ -29,6 +29,7 @@ jobs:
           repository: openclaw/openclaw-windows-node
           ref: 3ca913a43a62957b8aca0448667facff3290fbc6
           path: windows-node
+          fetch-depth: 0
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
