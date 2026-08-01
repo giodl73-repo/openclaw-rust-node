@@ -60,9 +60,10 @@ they should not copy its Gateway and runtime logic into the adopter tree.
 `windows-node/` pins the validated shared-runtime revision and the independent
 Windows sidecar-adapter revision. Its PowerShell harness compares the three
 OpenClaw-owned sidecar corpora by Git blob, runs the complete shared Rust
-workspace, and runs the focused Windows `RustSidecar` suite. The hosted lane
-uses Windows because the adopter is a .NET Windows product repository.
+workspace, builds the test-only Rust process probe, and runs the focused
+Windows `RustSidecar` suite with that child attached. The hosted lane uses
+Windows because the adopter is a .NET Windows product repository.
 
-This closes revision and contract-composition ambiguity only. It does not
-launch or select Rust in the Windows product; process, bootstrap, IPC,
+This closes revision, contract-composition, and cross-process codec ambiguity.
+It does not select Rust in the Windows product; production bootstrap, IPC,
 supervision, audit, rollout, and rollback remain separate adoption gates.
