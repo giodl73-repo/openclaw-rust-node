@@ -9,7 +9,7 @@ feedback before the complete upstream series lands.
 - Source repository: `openclaw/openclaw`
 - Source fork: `giodl73-repo/openclaw`
 - Cumulative source branch: `agent/rust-sidecar-runtime-bridge`
-- Source commit: `8d0a1b013ea83b1726e284d71791002260eac3c6`
+- Source commit: `71c1c8cb23c5647dc07fd4ee1f8663068c92a482`
 - Upstream review: [OpenClaw PR #116863](https://github.com/openclaw/openclaw/pull/116863)
 - Logical prerequisites: [#116050](https://github.com/openclaw/openclaw/pull/116050)
   and [#116450](https://github.com/openclaw/openclaw/pull/116450)
@@ -40,9 +40,12 @@ contract.
 
 The snapshot includes authenticated framing, negotiation, immutable runtime
 configuration, ordinary-command bridging, lifecycle, admission, cancellation,
-and conformance fixtures. It does not provide production process supervision,
-protected credential bootstrap, a concrete local IPC transport, product audit
-integration, runtime selection, rollout, or rollback.
+and conformance fixtures. Its test harness launches a separate OS child and
+completes configuration, exact manifest acknowledgement, admission, invocation,
+and result exchange over loopback TCP. This proves the generic process and
+transport boundary; it does not provide production process supervision,
+protected credential bootstrap, product-selected IPC, artifact verification,
+product audit integration, runtime selection, rollout, or rollback.
 
 ## Validation
 
@@ -56,3 +59,4 @@ RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path crates/Cargo.toml --workspa
 ```
 
 The repository CI runs these independently from the historical root prototype.
+At the synchronized source head, the workspace contains 124 passing Rust tests.

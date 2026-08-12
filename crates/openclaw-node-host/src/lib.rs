@@ -26,8 +26,9 @@ pub use lifecycle::{
     RuntimeErrorClass,
 };
 pub use node::{
-    ClientError, ConnectAuth, DeviceProof, Event, EventSubscription, InvocationResult, NodeClient,
-    NodeClientConfig, NodeConnectOptions, NodeInvocation, NodeSession, NodeSessionEvent,
+    ClientError, ConnectAuth, ConnectChallenge, DeviceProof, Event, EventSubscription,
+    InvocationResult, NodeClient, NodeClientConfig, NodeConnectOptions, NodeInvocation,
+    NodeSession, NodeSessionEvent,
 };
 pub use reconnect::{
     DevicePairingReason, DevicePairingRequest, ReconnectAction, ReconnectPause, ReconnectPolicy,

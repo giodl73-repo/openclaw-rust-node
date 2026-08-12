@@ -1,7 +1,4 @@
-use std::{
-    fmt::{self, Write as _},
-    time::SystemTime,
-};
+use std::fmt::{self, Write as _};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -16,8 +13,6 @@ const SECRET_KEY_BYTES: usize = 32;
 pub enum IdentityError {
     #[error("operating-system randomness failed: {0}")]
     Random(String),
-    #[error("system clock predates the Unix epoch")]
-    Clock,
     #[error("external Ed25519 public key is invalid")]
     InvalidPublicKey,
     #[error("external Ed25519 signature does not match the canonical connect payload")]
@@ -57,13 +52,8 @@ impl DeviceSigningRequest {
         platform: &str,
         device_family: Option<&str>,
         signature_token: Option<&str>,
+        signed_at: u64,
     ) -> Result<Self, IdentityError> {
-        let signed_at = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| IdentityError::Clock)?
-            .as_millis()
-            .try_into()
-            .map_err(|_| IdentityError::Clock)?;
         Self::new_at(
             public_key,
             nonce,
@@ -191,12 +181,13 @@ impl NodeIdentity {
         device_id_from_public_key(&self.signing_key.verifying_key().to_bytes())
     }
 
-    pub(crate) fn sign_connect(
+    pub(crate) fn sign_connect_at(
         &self,
         nonce: &str,
         platform: &str,
         device_family: Option<&str>,
         signature_token: Option<&str>,
+        signed_at: u64,
     ) -> Result<DeviceProof, IdentityError> {
         let request = DeviceSigningRequest::new(
             self.signing_key.verifying_key().to_bytes(),
@@ -204,6 +195,7 @@ impl NodeIdentity {
             platform,
             device_family,
             signature_token,
+            signed_at,
         )?;
         let signature = self.signing_key.sign(request.payload().as_bytes());
         request.finish(signature.to_bytes())

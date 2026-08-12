@@ -505,7 +505,7 @@ async fn connect_host_attempt(
     }
     NodeClient::connect(
         NodeClientConfig::new(config.gateway_url.clone()),
-        move |_nonce| async move { Ok::<_, Infallible>(runtime.activate(options)) },
+        move |_challenge| async move { Ok::<_, Infallible>(runtime.activate(options)) },
     )
     .await
 }
@@ -860,7 +860,10 @@ mod tests {
                     &mut socket,
                     json!({
                         "type":"event", "event":"connect.challenge",
-                        "payload":{"nonce":format!("nonce-{attempt}")}
+                        "payload":{
+                            "nonce":format!("nonce-{attempt}"),
+                            "ts":1_700_000_000_123_u64
+                        }
                     }),
                 )
                 .await;

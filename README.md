@@ -18,11 +18,16 @@ proposed to the OpenClaw monorepo:
 
 The snapshot is taken from cumulative OpenClaw draft PR
 [#116863](https://github.com/openclaw/openclaw/pull/116863) at commit
-`8d0a1b013ea83b1726e284d71791002260eac3c6`. That branch includes foundation
+`71c1c8cb23c5647dc07fd4ee1f8663068c92a482`. That branch includes foundation
 PR [#116050](https://github.com/openclaw/openclaw/pull/116050), runtime PR
 [#116450](https://github.com/openclaw/openclaw/pull/116450), and the third
 sidecar slice. See [UPSTREAM_SNAPSHOT.md](UPSTREAM_SNAPSHOT.md) for provenance,
 scope, and synchronization rules.
+
+This drop includes the current Gateway challenge timestamp/signing contract,
+the nullable node invocation/session metadata, and a real child-process test
+covering authenticated configuration, manifest acknowledgement, admission,
+invocation, and result exchange over loopback TCP.
 
 The root `openclaw-node` package remains temporarily as historical prototype
 and package-evidence input. New integration work should target the two-crate
