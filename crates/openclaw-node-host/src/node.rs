@@ -1,7 +1,7 @@
 use openclaw_gateway_client::{
     ClientError as GatewayClientError, GatewayClient, GatewayClientConfig, GatewaySession, TlsTrust,
 };
-pub use openclaw_gateway_client::{Event, EventSubscription};
+pub use openclaw_gateway_client::{ConnectChallenge, Event, EventSubscription};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -357,19 +357,19 @@ impl NodeConnectOptions {
     /// this crate.
     /// # Errors
     ///
-    /// Returns an error when the system clock cannot produce the signed-at
-    /// timestamp required by the Gateway contract.
+    /// Returns an error when the public key cannot form a valid signing request.
     pub fn external_signing_request(
         &self,
         public_key: [u8; 32],
-        nonce: &str,
+        challenge: &ConnectChallenge,
     ) -> Result<DeviceSigningRequest, IdentityError> {
         DeviceSigningRequest::new(
             public_key,
-            nonce,
+            &challenge.nonce,
             &self.client.platform,
             self.client.device_family.as_deref(),
             self.auth.as_ref().and_then(ConnectAuth::signature_token),
+            challenge.issued_at_ms,
         )
     }
 
@@ -391,7 +391,7 @@ impl NodeConnectOptions {
         self
     }
 
-    fn finalize_identity(mut self, nonce: &str) -> Result<Self, IdentityError> {
+    fn finalize_identity(mut self, nonce: &str, issued_at_ms: u64) -> Result<Self, IdentityError> {
         if self.activated {
             self.advertised_caps.clone_from(&self.declared_caps);
             self.advertised_commands.clone_from(&self.declared_commands);
@@ -401,11 +401,12 @@ impl NodeConnectOptions {
         let Some(identity) = self.identity.take() else {
             return Ok(self);
         };
-        self.device = Some(identity.sign_connect(
+        self.device = Some(identity.sign_connect_at(
             nonce,
             &self.client.platform,
             self.client.device_family.as_deref(),
             self.auth.as_ref().and_then(ConnectAuth::signature_token),
+            issued_at_ms,
         )?);
         Ok(self)
     }
@@ -570,7 +571,7 @@ impl NodeClient {
         make_options: F,
     ) -> Result<NodeSession, ClientError>
     where
-        F: FnOnce(String) -> Fut,
+        F: FnOnce(ConnectChallenge) -> Fut,
         Fut: Future<Output = Result<NodeConnectOptions, E>>,
         E: Error + Send + Sync + 'static,
     {
@@ -592,12 +593,12 @@ impl NodeClient {
         }
         let connection_surface = Arc::new(Mutex::new((false, BTreeSet::new())));
         let surface_for_connect = Arc::clone(&connection_surface);
-        let gateway = GatewayClient::connect(gateway_config, move |nonce| async move {
-            let options = make_options(nonce.clone())
+        let gateway = GatewayClient::connect(gateway_config, move |challenge| async move {
+            let options = make_options(challenge.clone())
                 .await
                 .map_err(|error| ConnectOptionsError(error.to_string()))?;
             let options = options
-                .finalize_identity(&nonce)
+                .finalize_identity(&challenge.nonce, challenge.issued_at_ms)
                 .map_err(|error| ConnectOptionsError(error.to_string()))?;
             *surface_for_connect
                 .lock()
@@ -1044,7 +1045,13 @@ mod tests {
             .verifying_key()
             .to_bytes();
         let request = options
-            .external_signing_request(public_key, "nonce-1")
+            .external_signing_request(
+                public_key,
+                &ConnectChallenge {
+                    nonce: "nonce-1".into(),
+                    issued_at_ms: 1_700_000_000_000,
+                },
+            )
             .expect("external signing request");
         assert_eq!(
             request.payload(),
