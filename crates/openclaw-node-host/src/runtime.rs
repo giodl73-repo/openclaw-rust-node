@@ -951,7 +951,7 @@ fn handler_entry_rejection(
             "command invocation was cancelled before handler execution",
         ));
     }
-    if session.is_some_and(NodeSession::is_closed) {
+    if session.is_some_and(NodeSession::is_retired) {
         cancellation.cancel();
         return Some(failure(
             "SESSION_RETIRED",

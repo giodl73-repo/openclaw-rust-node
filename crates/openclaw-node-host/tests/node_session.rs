@@ -465,7 +465,7 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
 }
 
 #[tokio::test]
-async fn runtime_rejects_buffered_invocation_after_session_closes() {
+async fn runtime_rejects_buffered_invocation_after_session_retirement_is_requested() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -490,12 +490,33 @@ async fn runtime_rejects_buffered_invocation_after_session_closes() {
                 "payload":{"id":"retired","nodeId":"node-1","command":"example.status"}}),
         )
         .await;
-        socket.close(None).await.unwrap();
+        let barrier = receive_json(&mut socket).await;
+        assert_eq!(barrier["method"], "test.buffered");
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":barrier["id"],"ok":true,"payload":null}),
+        )
+        .await;
+        while let Some(message) = socket.next().await {
+            let message = message.unwrap();
+            if message.is_close() {
+                break;
+            }
+            if let Message::Text(text) = message {
+                let request: Value = serde_json::from_str(text.as_str()).unwrap();
+                send_json(
+                    &mut socket,
+                    json!({"type":"res","id":request["id"],"ok":true,"payload":null}),
+                )
+                .await;
+            }
+        }
     });
 
     let session = connect_with_command(address, "example.status").await;
-    assert!(session.wait_closed().await.is_err());
-    assert!(session.is_closed());
+    session.request("test.buffered", Value::Null).await.unwrap();
+    session.close().await;
+    assert!(session.is_retired());
 
     let handler_ran = Arc::new(AtomicBool::new(false));
     let handler_state = Arc::clone(&handler_ran);

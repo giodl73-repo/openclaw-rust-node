@@ -860,6 +860,11 @@ impl NodeSession {
         self.gateway.is_closed()
     }
 
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.gateway.is_retired()
+    }
+
     /// Wait until the Gateway transport closes.
     /// # Errors
     ///
