@@ -1,10 +1,11 @@
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{future::poll_fn, Sink, SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     net::IpAddr,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
@@ -32,8 +33,11 @@ const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
+type DispatchGuard = Box<dyn FnOnce() -> Result<(), DispatchRejection> + Send>;
 
 #[derive(Clone, Debug)]
 pub struct GatewayClientConfig {
@@ -44,6 +48,7 @@ pub struct GatewayClientConfig {
     request_timeout: Duration,
     write_timeout: Duration,
     max_message_bytes: usize,
+    max_frame_bytes: usize,
     max_event_buffer_bytes: usize,
     event_capacity: usize,
     max_in_flight: usize,
@@ -65,6 +70,7 @@ impl GatewayClientConfig {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             write_timeout: DEFAULT_WRITE_TIMEOUT,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_event_buffer_bytes: DEFAULT_MAX_EVENT_BUFFER_BYTES,
             event_capacity: 256,
             max_in_flight: 64,
@@ -118,6 +124,12 @@ impl GatewayClientConfig {
     }
 
     #[must_use]
+    pub fn max_frame_bytes(mut self, bytes: usize) -> Self {
+        self.max_frame_bytes = bytes;
+        self
+    }
+
+    #[must_use]
     pub fn max_event_buffer_bytes(mut self, bytes: usize) -> Self {
         self.max_event_buffer_bytes = bytes;
         self
@@ -143,6 +155,26 @@ pub struct Event {
     pub payload: Value,
     #[serde(default)]
     pub seq: Option<u64>,
+}
+
+/// Reason a request was rejected by an application-owned pre-dispatch guard.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatchRejection {
+    reason: String,
+}
+
+impl DispatchRejection {
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
 }
 
 /// Independent retained-event consumer that drains buffered events and then
@@ -321,6 +353,8 @@ pub enum ClientError {
     },
     #[error("Gateway request timed out: {0}")]
     RequestTimeout(String),
+    #[error("Gateway request dispatch rejected: {0}")]
+    DispatchRejected(String),
     #[error("Gateway write timed out: {0}")]
     WriteTimeout(String),
     #[error("Gateway session is closed: {0}")]
@@ -359,7 +393,7 @@ impl GatewayClient {
         }
         let websocket_config = WebSocketConfig::default()
             .max_message_size(Some(config.max_message_bytes))
-            .max_frame_size(Some(config.max_message_bytes));
+            .max_frame_size(Some(config.max_frame_bytes));
         let connector = match config.tls_trust {
             TlsTrust::SystemRoots => None,
             TlsTrust::Pinned(expected) => Some(Connector::Rustls(Arc::new(
@@ -392,6 +426,7 @@ impl GatewayClient {
             "connect",
             params,
             config.write_timeout,
+            None,
         )
         .await?;
         let hello = tokio::time::timeout(
@@ -483,13 +518,45 @@ impl GatewaySession {
         method: impl Into<String>,
         params: Value,
     ) -> Result<Value, ClientError> {
-        let method = method.into();
+        self.request_inner(
+            method.into(),
+            params,
+            Instant::now() + self.request_timeout,
+            None,
+        )
+        .await
+    }
+
+    /// Send a request before `deadline` if its application-owned guard still accepts dispatch.
+    ///
+    /// The guard runs synchronously in the session task after the socket becomes writable and
+    /// immediately before the request frame is handed to the WebSocket sink. It must not block.
+    pub async fn request_with_deadline<G>(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        deadline: Instant,
+        guard: G,
+    ) -> Result<Value, ClientError>
+    where
+        G: FnOnce() -> Result<(), DispatchRejection> + Send + 'static,
+    {
+        self.request_inner(method.into(), params, deadline, Some(Box::new(guard)))
+            .await
+    }
+
+    async fn request_inner(
+        &self,
+        method: String,
+        params: Value,
+        deadline: Instant,
+        guard: Option<DispatchGuard>,
+    ) -> Result<Value, ClientError> {
         if method.is_empty() {
             return Err(ClientError::InvalidFrame(
                 "request method must not be empty".into(),
             ));
         }
-        let deadline = Instant::now() + self.request_timeout;
         let permit = tokio::time::timeout_at(deadline, self.in_flight.clone().acquire_owned())
             .await
             .map_err(|_| ClientError::RequestTimeout(method.clone()))?
@@ -510,6 +577,7 @@ impl GatewaySession {
                 permit,
                 deadline,
                 cancelled: Arc::clone(&cancelled),
+                guard,
             }),
         )
         .await
@@ -634,6 +702,7 @@ enum SessionCommand {
         permit: tokio::sync::OwnedSemaphorePermit,
         deadline: Instant,
         cancelled: Arc<AtomicBool>,
+        guard: Option<DispatchGuard>,
     },
     CancelRequest {
         id: String,
@@ -761,16 +830,18 @@ async fn send_request<S>(
     method: &str,
     params: Value,
     write_timeout: Duration,
+    guard: Option<DispatchGuard>,
 ) -> Result<(), ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let frame = json!({ "type": "req", "id": id, "method": method, "params": params });
-    send_message(
+    send_message_guarded(
         socket,
         Message::Text(frame.to_string().into()),
         write_timeout,
         method,
+        guard,
     )
     .await
 }
@@ -784,10 +855,36 @@ async fn send_message<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    tokio::time::timeout(timeout, socket.send(message))
-        .await
-        .map_err(|_| ClientError::WriteTimeout(operation.into()))?
-        .map_err(|error| ClientError::Transport(error.to_string()))
+    send_message_guarded(socket, message, timeout, operation, None).await
+}
+
+async fn send_message_guarded<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    message: Message,
+    timeout: Duration,
+    operation: &str,
+    guard: Option<DispatchGuard>,
+) -> Result<(), ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(timeout, async {
+        poll_fn(|context| Pin::new(&mut *socket).poll_ready(context))
+            .await
+            .map_err(|error| ClientError::Transport(error.to_string()))?;
+        if let Some(guard) = guard {
+            guard().map_err(|rejection| ClientError::DispatchRejected(rejection.reason))?;
+        }
+        Pin::new(&mut *socket)
+            .start_send(message)
+            .map_err(|error| ClientError::Transport(error.to_string()))?;
+        socket
+            .flush()
+            .await
+            .map_err(|error| ClientError::Transport(error.to_string()))
+    })
+    .await
+    .map_err(|_| ClientError::WriteTimeout(operation.into()))?
 }
 
 struct SessionChannels {
@@ -863,7 +960,7 @@ async fn run_session<S>(
             }
             command = commands.recv() => {
                 match command {
-                    Some(SessionCommand::Request { id, method, params, reply, permit, deadline, cancelled }) => {
+                    Some(SessionCommand::Request { id, method, params, reply, permit, deadline, cancelled, guard }) => {
                         if cancelled.load(Ordering::Acquire) {
                             continue;
                         }
@@ -879,6 +976,7 @@ async fn run_session<S>(
                             &method,
                             params,
                             write_timeout.min(remaining),
+                            guard,
                         ).await {
                             Ok(()) => {
                                 pending.insert(id, PendingRequest { method, reply, _permit: permit, deadline, cancelled });
@@ -891,6 +989,9 @@ async fn run_session<S>(
                                 };
                                 let _ = reply.send(result);
                                 break SessionCloseCause::WriteTimeout(operation);
+                            }
+                            Err(error @ ClientError::DispatchRejected(_)) => {
+                                let _ = reply.send(Err(error));
                             }
                             Err(error) => {
                                 let reason = error.to_string();
@@ -1188,6 +1289,7 @@ mod tests {
                 permit,
                 deadline: Instant::now() + Duration::from_secs(1),
                 cancelled,
+                guard: None,
             })
             .await
             .unwrap();
@@ -1233,5 +1335,18 @@ mod tests {
             receiver.try_recv(),
             Ok(SessionCommand::CancelRequest { id }) if id == "queue-filler"
         ));
+    }
+
+    #[test]
+    fn message_and_frame_limits_have_independent_tauri_compatible_defaults() {
+        let config = GatewayClientConfig::new("ws://127.0.0.1:18789").unwrap();
+        assert_eq!(config.max_message_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.max_frame_bytes, 16 * 1024 * 1024);
+
+        let config = config
+            .max_message_bytes(32 * 1024 * 1024)
+            .max_frame_bytes(8 * 1024 * 1024);
+        assert_eq!(config.max_message_bytes, 32 * 1024 * 1024);
+        assert_eq!(config.max_frame_bytes, 8 * 1024 * 1024);
     }
 }

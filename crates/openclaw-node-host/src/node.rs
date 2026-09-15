@@ -818,6 +818,9 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
             retry_after_ms,
         },
         GatewayClientError::RequestTimeout(method) => ClientError::RequestTimeout(method),
+        GatewayClientError::DispatchRejected(_) => {
+            unreachable!("node client only issues unguarded Gateway requests")
+        }
         GatewayClientError::WriteTimeout(operation) => ClientError::WriteTimeout(operation),
         GatewayClientError::Closed(error) => ClientError::Closed(error),
         GatewayClientError::InvalidFrame(error) => ClientError::InvalidFrame(error),

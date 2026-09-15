@@ -1,5 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
-use openclaw_gateway_client::{ClientError, Event, GatewayClient, GatewayClientConfig};
+use openclaw_gateway_client::{
+    ClientError, DispatchRejection, Event, GatewayClient, GatewayClientConfig,
+};
 use serde_json::{json, Value};
 use std::{io, time::Duration};
 use tokio::net::TcpListener;
@@ -81,6 +83,171 @@ async fn connects_publishes_events_and_correlates_requests() {
             .await
             .unwrap(),
         json!({"echo":{"value":42}})
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn dispatch_guard_rejects_before_wire_without_closing_the_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-guard","ts":1_700_000_000_123_u64}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+
+        let request = receive_json(&mut socket).await;
+        assert_eq!(request["method"], "node.after-rejection");
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":request["id"], "ok":true,
+                "payload":{"ok":true}
+            }),
+        )
+        .await;
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    let rejected = session
+        .request_with_deadline(
+            "node.rejected",
+            json!({}),
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            || Err(DispatchRejection::new("generation changed")),
+        )
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(ClientError::DispatchRejected(reason)) if reason == "generation changed"
+    ));
+    assert_eq!(
+        session
+            .request("node.after-rejection", json!({}))
+            .await
+            .unwrap(),
+        json!({"ok":true})
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_deadline_includes_session_queue_wait() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-queue","ts":1_700_000_000_123_u64}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+
+        let first = receive_json(&mut socket).await;
+        assert_eq!(first["method"], "node.blocking-guard");
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":first["id"], "ok":true,
+                "payload":{"ok":true}
+            }),
+        )
+        .await;
+        let next = receive_json(&mut socket).await;
+        assert_eq!(next["method"], "node.after-timeout");
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":next["id"], "ok":true,
+                "payload":{"ok":true}
+            }),
+        )
+        .await;
+    });
+
+    let config = GatewayClientConfig::new(format!("ws://{address}"))
+        .unwrap()
+        .request_timeout(Duration::from_secs(1))
+        .max_in_flight(3);
+    let session = GatewayClient::connect(config, |_| async {
+        Ok::<_, io::Error>(json!({"role":"node"}))
+    })
+    .await
+    .unwrap();
+
+    let (guard_started_tx, guard_started_rx) = std::sync::mpsc::channel();
+    let (guard_release_tx, guard_release_rx) = std::sync::mpsc::channel();
+    let first_session = session.clone();
+    let first = tokio::spawn(async move {
+        first_session
+            .request_with_deadline(
+                "node.blocking-guard",
+                json!({}),
+                tokio::time::Instant::now() + Duration::from_secs(1),
+                move || {
+                    guard_started_tx.send(()).unwrap();
+                    guard_release_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || guard_started_rx.recv().unwrap())
+        .await
+        .unwrap();
+
+    let expired = session
+        .request_with_deadline(
+            "node.expires-in-queue",
+            json!({}),
+            tokio::time::Instant::now() + Duration::from_millis(20),
+            || Ok(()),
+        )
+        .await;
+    assert!(matches!(
+        expired,
+        Err(ClientError::RequestTimeout(method)) if method == "node.expires-in-queue"
+    ));
+    guard_release_tx.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), json!({"ok":true}));
+    assert_eq!(
+        session
+            .request("node.after-timeout", json!({}))
+            .await
+            .unwrap(),
+        json!({"ok":true})
     );
     server.await.unwrap();
 }
