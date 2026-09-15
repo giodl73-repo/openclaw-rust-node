@@ -692,24 +692,8 @@ impl CommandRuntime {
                 return Evaluation::tracked(result, tracking);
             }
         };
-        if cancellation.is_cancelled() {
-            return Evaluation::tracked(
-                failure(
-                    "INVOCATION_CANCELLED",
-                    "command invocation was cancelled before handler execution",
-                ),
-                tracking,
-            );
-        }
-        if session.as_ref().is_some_and(NodeSession::is_closed) {
-            tracking.cancel();
-            return Evaluation::tracked(
-                failure(
-                    "SESSION_RETIRED",
-                    "command invocation belongs to a retired session",
-                ),
-                tracking,
-            );
+        if let Some(result) = handler_entry_rejection(&cancellation, session.as_ref()) {
+            return Evaluation::tracked(result, tracking);
         }
         let duplex = InvocationDuplex::start(
             registration.duplex,
@@ -945,6 +929,26 @@ struct SessionScope {
     marker: Weak<()>,
     active: ActiveInvocations,
     overload_permits: Arc<Semaphore>,
+}
+
+fn handler_entry_rejection(
+    cancellation: &CancellationToken,
+    session: Option<&NodeSession>,
+) -> Option<InvocationResult> {
+    if cancellation.is_cancelled() {
+        return Some(failure(
+            "INVOCATION_CANCELLED",
+            "command invocation was cancelled before handler execution",
+        ));
+    }
+    if session.is_some_and(NodeSession::is_closed) {
+        cancellation.cancel();
+        return Some(failure(
+            "SESSION_RETIRED",
+            "command invocation belongs to a retired session",
+        ));
+    }
+    None
 }
 
 fn runtime_task_failure(
