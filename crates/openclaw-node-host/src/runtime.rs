@@ -692,6 +692,16 @@ impl CommandRuntime {
                 return Evaluation::tracked(result, tracking);
             }
         };
+        if tracking.input_overflow.is_cancelled() {
+            cancellation.cancel();
+            return Evaluation::tracked(
+                failure(
+                    "INPUT_BUFFER_OVERFLOW",
+                    "duplex command input exceeded the pending-byte limit",
+                ),
+                tracking,
+            );
+        }
         if let Some(result) = handler_entry_rejection(&cancellation, session.as_ref()) {
             return Evaluation::tracked(result, tracking);
         }
