@@ -19,6 +19,14 @@ secret delivery, process creation, secure storage, or runtime selection. A
 peer identity reported inside this protocol is authenticated by the session
 key but is not proof that the executable on disk was trusted.
 
+Gateway endpoint selection, challenge signing, node-protocol negotiation, and
+device-token persistence stay with the platform-owned `NodeLifecycle`
+connection factory. In particular, an `IssuedDeviceToken` is never placed in
+sidecar configuration or status traffic. Its attempt number can be correlated
+with the secret-free lifecycle `attempt` status, but delivery and durable
+acknowledgement require a separate protected product channel outside this
+protocol.
+
 ## Length prefix and local ceiling
 
 Each frame is preceded by an unsigned four-byte big-endian length. The length
@@ -74,6 +82,12 @@ its surrounding IPC transport fails.
 A new process gets a new session identifier, key, generation, and sequence
 space. A sequence gap or replay is rejected rather than buffered. Rotate the
 generation before sequence exhaustion; never reset a sequence in place.
+
+The authenticated channel generation, immutable manifest generation,
+`NodeLifecycle` connection attempt, and Gateway pairing generation are separate
+scopes. This protocol carries only the first three. Gateway pairing approval,
+committed-policy reconciliation, and pairing-generation leases remain Gateway
+authority and must not be inferred from a sidecar generation or manifest.
 
 ## Negotiation
 
@@ -177,6 +191,15 @@ becomes a bounded structured handler failure. The runtime cancellation token is
 passed through both waits so product adapter work can stop on Gateway cancel,
 timeout, disconnect, or shutdown.
 
+The configured command list is an offered connection manifest, not an approval
+or policy grant. The Gateway decides whether a declared command is invocable;
+only a Gateway-delivered invocation reaches the bridge's additional
+fail-closed local admission. Surface widening requires a newly configured
+bridge and a new Gateway connection manifest. Committed policy revocation or a
+pairing-generation transition can preserve the physical Gateway connection
+while cancelling generation-bound work; that cancellation reaches the adapter
+through the existing runtime token rather than a new sidecar wire field.
+
 Logical parameter and result limits are not treated as complete-frame limits.
 Before cloning Gateway JSON into an adapter request, and without cloning an
 adapter decision/result, the bridge runs a borrowed non-allocating serialization
@@ -195,10 +218,12 @@ registrations cannot be mutated in place after advertisement.
 
 ## Not yet implemented
 
-This stack still excludes a concrete IPC driver, protected credential/config
+This stack still excludes product IPC selection, protected credential/config
 delivery, duplex input/progress transport, a product audit adapter, process
-supervision, artifact verification, restart/rollback policy, and production
-credential storage. The typed runtime messages and adapter boundary do not by
+supervision, artifact verification, packaging, Windows integration,
+restart/rollback policy, production credential storage, worker/session
+hosting, workspace transfer, plugins, host statistics, `system.run`, PTY, MCP,
+and skills. The typed runtime messages and adapter boundary do not by
 themselves claim production sidecar readiness. Those remaining concerns must
 not weaken authentication, bounds, generation, sequencing, cancellation, or
 fail-closed behavior.
