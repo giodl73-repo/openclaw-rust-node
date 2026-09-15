@@ -692,6 +692,25 @@ impl CommandRuntime {
                 return Evaluation::tracked(result, tracking);
             }
         };
+        if cancellation.is_cancelled() {
+            return Evaluation::tracked(
+                failure(
+                    "INVOCATION_CANCELLED",
+                    "command invocation was cancelled before handler execution",
+                ),
+                tracking,
+            );
+        }
+        if session.as_ref().is_some_and(NodeSession::is_closed) {
+            tracking.cancel();
+            return Evaluation::tracked(
+                failure(
+                    "SESSION_RETIRED",
+                    "command invocation belongs to a retired session",
+                ),
+                tracking,
+            );
+        }
         let duplex = InvocationDuplex::start(
             registration.duplex,
             session,
@@ -1803,6 +1822,41 @@ mod tests {
             .await
             .expect("cancelled admission returned")
             .unwrap();
+
+        assert_eq!(
+            failure_code(&evaluation.result),
+            Some("INVOCATION_CANCELLED")
+        );
+        assert!(!handler_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_evaluation_rejects_handler_entry() {
+        let handler_ran = Arc::new(AtomicBool::new(false));
+        let handler_state = Arc::clone(&handler_ran);
+        let runtime = CommandRuntime::builder()
+            .command("example.status", move |_context| {
+                let handler_state = Arc::clone(&handler_state);
+                handler_state.store(true, Ordering::SeqCst);
+                async { Ok(Value::Null) }
+            })
+            .build()
+            .unwrap();
+        let active = ActiveInvocations::default();
+        let cancellation = CancellationToken::new();
+        let tracking = active
+            .track("invoke-1", "node-1", &cancellation, false)
+            .unwrap();
+        cancellation.cancel();
+
+        let evaluation = runtime
+            .evaluate_tracked(
+                invocation("invoke-1", "example.status", Value::Null),
+                cancellation,
+                tracking,
+                None,
+            )
+            .await;
 
         assert_eq!(
             failure_code(&evaluation.result),

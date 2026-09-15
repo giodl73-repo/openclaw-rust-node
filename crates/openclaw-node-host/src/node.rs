@@ -855,6 +855,11 @@ impl NodeSession {
         self.gateway.close().await;
     }
 
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.gateway.is_closed()
+    }
+
     /// Wait until the Gateway transport closes.
     /// # Errors
     ///

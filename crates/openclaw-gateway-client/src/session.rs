@@ -681,6 +681,11 @@ impl GatewaySession {
         let _ = self.close_tx.send(true);
     }
 
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed_rx.borrow().is_some()
+    }
+
     pub async fn wait_closed(&self) -> Result<(), ClientError> {
         let mut closed = self.closed_rx.clone();
         loop {
