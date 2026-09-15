@@ -505,7 +505,11 @@ async fn connect_host_attempt(
     }
     NodeClient::connect(
         NodeClientConfig::new(config.gateway_url.clone()),
-        move |_challenge| async move { Ok::<_, Infallible>(runtime.activate(options)) },
+        move |_challenge| {
+            let runtime = runtime.clone();
+            let options = options.clone();
+            async move { Ok::<_, Infallible>(runtime.activate(options)) }
+        },
     )
     .await
 }

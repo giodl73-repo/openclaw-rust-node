@@ -28,7 +28,7 @@ pub use lifecycle::{
 pub use node::{
     ClientError, ConnectAuth, ConnectChallenge, DeviceProof, Event, EventSubscription,
     InvocationResult, NodeClient, NodeClientConfig, NodeConnectOptions, NodeInvocation,
-    NodeSession, NodeSessionEvent,
+    NodeProtocolVersion, NodeSession, NodeSessionEvent,
 };
 pub use reconnect::{
     DevicePairingReason, DevicePairingRequest, ReconnectAction, ReconnectPause, ReconnectPolicy,

@@ -371,6 +371,15 @@ pub struct ConnectChallenge {
     pub issued_at_ms: u64,
 }
 
+/// Identifies which bounded connect envelope a parameter callback must build.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectAttempt {
+    /// The caller's current protocol envelope.
+    Current,
+    /// The one allowed fallback selected by a structured Gateway rejection.
+    ProtocolFallback { expected_protocol: u32 },
+}
+
 pub struct GatewayClient;
 
 impl GatewayClient {
@@ -384,98 +393,162 @@ impl GatewayClient {
         Fut: Future<Output = Result<Value, E>>,
         E: std::fmt::Display + Send + Sync + 'static,
     {
-        if matches!(config.tls_trust, TlsTrust::Pinned(_))
-            && config.request.uri().scheme_str() != Some("wss")
-        {
-            return Err(ClientError::Tls(
-                "Gateway TLS fingerprint requires a wss:// URL".into(),
-            ));
-        }
-        let websocket_config = WebSocketConfig::default()
-            .max_message_size(Some(config.max_message_bytes))
-            .max_frame_size(Some(config.max_frame_bytes));
-        let connector = match config.tls_trust {
-            TlsTrust::SystemRoots => None,
-            TlsTrust::Pinned(expected) => Some(Connector::Rustls(Arc::new(
-                pinned_tls_config(expected).map_err(ClientError::Transport)?,
-            ))),
-        };
-        let secure_endpoint = config.request.uri().scheme_str() == Some("wss");
-        let (mut socket, _) = tokio::time::timeout(
-            config.connect_timeout,
-            connect_async_tls_with_config(config.request, Some(websocket_config), false, connector),
-        )
-        .await
-        .map_err(|_| ClientError::ConnectTimeout)?
-        .map_err(|error| classify_connect_error(error, secure_endpoint))?;
-
-        let challenge = tokio::time::timeout(
-            config.challenge_timeout,
-            wait_for_challenge(&mut socket, config.write_timeout),
-        )
-        .await
-        .map_err(|_| ClientError::ChallengeTimeout)??;
-        let params = make_params(challenge)
-            .await
-            .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
-
-        let connect_id = "rust-gateway-connect-1";
-        send_request(
-            &mut socket,
-            connect_id,
-            "connect",
-            params,
-            config.write_timeout,
-            None,
-        )
-        .await?;
-        let hello = tokio::time::timeout(
-            config.request_timeout,
-            wait_for_response(&mut socket, connect_id, "connect", config.write_timeout),
-        )
-        .await
-        .map_err(|_| ClientError::RequestTimeout("connect".into()))??;
-
-        // Keep requests and cancellations on one bounded, ordered stream so a
-        // timeout cannot overtake its request. Each request carries its
-        // semaphore permit through the session task, bounding queued and
-        // pending requests even if the caller drops its future.
-        let command_capacity = config.max_in_flight.max(1);
-        let (command_tx, command_rx) = mpsc::channel(command_capacity);
-        let events = Arc::new(EventHub::new(
-            config.event_capacity,
-            config.max_event_buffer_bytes,
-        ));
-        let (activity_tx, activity_rx) = watch::channel(0_u64);
-        let (closed_tx, closed_rx) = watch::channel(None);
-        let (close_tx, close_rx) = watch::channel(false);
-        tokio::spawn(run_session(
-            socket,
-            SessionChannels {
-                commands: command_rx,
-                events: Arc::clone(&events),
-                activity: activity_tx,
-                closed: closed_tx,
-                close: close_rx,
-            },
-            SessionLimits {
-                write_timeout: config.write_timeout,
-            },
-        ));
-
-        Ok(GatewaySession {
-            hello,
-            command_tx,
-            event_rx: Arc::new(Mutex::new(events.initial_subscription(closed_rx.clone()))),
-            events,
-            activity_rx,
-            closed_rx,
-            close_tx,
-            next_request_id: Arc::new(AtomicU64::new(1)),
-            request_timeout: config.request_timeout,
-            in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
-        })
+        connect_once(config, make_params).await
     }
+
+    /// Connect with one bounded fallback for a structured protocol mismatch.
+    ///
+    /// A fallback is attempted only when the first `connect` response contains
+    /// `details.code = "PROTOCOL_MISMATCH"` and the requested
+    /// `details.expectedProtocol`. The replacement connection obtains a fresh
+    /// challenge and invokes `make_params` again.
+    pub async fn connect_with_protocol_fallback<F, Fut, E>(
+        config: GatewayClientConfig,
+        expected_protocol: u32,
+        mut make_params: F,
+    ) -> Result<GatewaySession, ClientError>
+    where
+        F: FnMut(ConnectChallenge, ConnectAttempt) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+        E: std::fmt::Display + Send + Sync + 'static,
+    {
+        let first = Box::pin(connect_once(config.clone(), |challenge| {
+            make_params(challenge, ConnectAttempt::Current)
+        }))
+        .await;
+        match first {
+            Err(error) if is_expected_protocol_mismatch(&error, expected_protocol) => {
+                Box::pin(connect_once(config, |challenge| {
+                    make_params(
+                        challenge,
+                        ConnectAttempt::ProtocolFallback { expected_protocol },
+                    )
+                }))
+                .await
+            }
+            result => result,
+        }
+    }
+}
+
+fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) -> bool {
+    let ClientError::Gateway {
+        method, details, ..
+    } = error
+    else {
+        return false;
+    };
+    if method != "connect" {
+        return false;
+    }
+    let Some(details) = details.as_ref() else {
+        return false;
+    };
+    details.get("code").and_then(Value::as_str) == Some("PROTOCOL_MISMATCH")
+        && details.get("expectedProtocol").and_then(Value::as_u64)
+            == Some(u64::from(expected_protocol))
+}
+
+async fn connect_once<F, Fut, E>(
+    config: GatewayClientConfig,
+    make_params: F,
+) -> Result<GatewaySession, ClientError>
+where
+    F: FnOnce(ConnectChallenge) -> Fut,
+    Fut: Future<Output = Result<Value, E>>,
+    E: std::fmt::Display + Send + Sync + 'static,
+{
+    if matches!(config.tls_trust, TlsTrust::Pinned(_))
+        && config.request.uri().scheme_str() != Some("wss")
+    {
+        return Err(ClientError::Tls(
+            "Gateway TLS fingerprint requires a wss:// URL".into(),
+        ));
+    }
+    let websocket_config = WebSocketConfig::default()
+        .max_message_size(Some(config.max_message_bytes))
+        .max_frame_size(Some(config.max_frame_bytes));
+    let connector = match config.tls_trust {
+        TlsTrust::SystemRoots => None,
+        TlsTrust::Pinned(expected) => Some(Connector::Rustls(Arc::new(
+            pinned_tls_config(expected).map_err(ClientError::Transport)?,
+        ))),
+    };
+    let secure_endpoint = config.request.uri().scheme_str() == Some("wss");
+    let (mut socket, _) = tokio::time::timeout(
+        config.connect_timeout,
+        connect_async_tls_with_config(config.request, Some(websocket_config), false, connector),
+    )
+    .await
+    .map_err(|_| ClientError::ConnectTimeout)?
+    .map_err(|error| classify_connect_error(error, secure_endpoint))?;
+
+    let challenge = tokio::time::timeout(
+        config.challenge_timeout,
+        wait_for_challenge(&mut socket, config.write_timeout),
+    )
+    .await
+    .map_err(|_| ClientError::ChallengeTimeout)??;
+    let params = make_params(challenge)
+        .await
+        .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
+
+    let connect_id = "rust-gateway-connect-1";
+    send_request(
+        &mut socket,
+        connect_id,
+        "connect",
+        params,
+        config.write_timeout,
+        None,
+    )
+    .await?;
+    let hello = tokio::time::timeout(
+        config.request_timeout,
+        wait_for_response(&mut socket, connect_id, "connect", config.write_timeout),
+    )
+    .await
+    .map_err(|_| ClientError::RequestTimeout("connect".into()))??;
+
+    // Keep requests and cancellations on one bounded, ordered stream so a
+    // timeout cannot overtake its request. Each request carries its
+    // semaphore permit through the session task, bounding queued and
+    // pending requests even if the caller drops its future.
+    let command_capacity = config.max_in_flight.max(1);
+    let (command_tx, command_rx) = mpsc::channel(command_capacity);
+    let events = Arc::new(EventHub::new(
+        config.event_capacity,
+        config.max_event_buffer_bytes,
+    ));
+    let (activity_tx, activity_rx) = watch::channel(0_u64);
+    let (closed_tx, closed_rx) = watch::channel(None);
+    let (close_tx, close_rx) = watch::channel(false);
+    tokio::spawn(run_session(
+        socket,
+        SessionChannels {
+            commands: command_rx,
+            events: Arc::clone(&events),
+            activity: activity_tx,
+            closed: closed_tx,
+            close: close_rx,
+        },
+        SessionLimits {
+            write_timeout: config.write_timeout,
+        },
+    ));
+
+    Ok(GatewaySession {
+        hello,
+        command_tx,
+        event_rx: Arc::new(Mutex::new(events.initial_subscription(closed_rx.clone()))),
+        events,
+        activity_rx,
+        closed_rx,
+        close_tx,
+        next_request_id: Arc::new(AtomicU64::new(1)),
+        request_timeout: config.request_timeout,
+        in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
+    })
 }
 
 #[derive(Clone)]

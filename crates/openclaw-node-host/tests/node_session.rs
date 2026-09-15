@@ -2,7 +2,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use openclaw_node_host::{
     CommandRuntime, ConnectAuth, InvocationResult, NodeClient, NodeClientConfig,
-    NodeConnectOptions, NodeSession,
+    NodeConnectOptions, NodeProtocolVersion, NodeSession,
 };
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
@@ -64,17 +64,20 @@ async fn node_profile_uses_shared_session_for_invocations() {
     let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |challenge| async move {
-            assert_eq!(challenge.nonce, "node-nonce");
-            let options = NodeConnectOptions::new("test", "linux")
-                .command("example.status")
-                .activate()
-                .auth(ConnectAuth::token("test-token"));
-            let request = options.external_signing_request(public_key, &challenge)?;
-            let signature = signing_key.sign(request.payload().as_bytes());
-            Ok::<_, openclaw_node_host::IdentityError>(
-                options.device(request.finish(signature.to_bytes())?),
-            )
+        move |challenge| {
+            let signing_key = signing_key.clone();
+            async move {
+                assert_eq!(challenge.nonce, "node-nonce");
+                let options = NodeConnectOptions::new("test", "linux")
+                    .command("example.status")
+                    .activate()
+                    .auth(ConnectAuth::token("test-token"));
+                let request = options.external_signing_request(public_key, &challenge)?;
+                let signature = signing_key.sign(request.payload().as_bytes());
+                Ok::<_, openclaw_node_host::IdentityError>(
+                    options.device(request.finish(signature.to_bytes())?),
+                )
+            }
         },
     )
     .await
@@ -91,6 +94,102 @@ async fn node_profile_uses_shared_session_for_invocations() {
         )
         .await
         .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn node_protocol_fallback_uses_fresh_legacy_connect_material_and_recovers_to_v4() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut current, current_connect) =
+            accept_node_connect(&listener, "nonce-v4", 1_700_000_000_123).await;
+        assert_current_connect(&current_connect, "nonce-v4");
+        send_json(
+            &mut current,
+            json!({
+                "type":"res", "id":current_connect["id"], "ok":false,
+                "error":{
+                    "code":"INVALID_REQUEST",
+                    "message":"protocol mismatch",
+                    "details":{"code":"PROTOCOL_MISMATCH","expectedProtocol":3}
+                }
+            }),
+        )
+        .await;
+
+        let (mut legacy, legacy_connect) =
+            accept_node_connect(&listener, "nonce-v3", 1_700_000_000_456).await;
+        assert_legacy_connect(&legacy_connect, "nonce-v3");
+        assert_ne!(
+            current_connect["params"]["device"]["signature"],
+            legacy_connect["params"]["device"]["signature"]
+        );
+        send_json(
+            &mut legacy,
+            json!({
+                "type":"res", "id":legacy_connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":3}
+            }),
+        )
+        .await;
+        send_json(
+            &mut legacy,
+            json!({
+                "type":"event", "event":"node.invoke.request",
+                "payload":{
+                    "id":"invoke-v3",
+                    "nodeId":"node-1",
+                    "command":"example.status",
+                    "params":{"verbose":true}
+                }
+            }),
+        )
+        .await;
+        while let Some(Ok(message)) = legacy.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+
+        let (mut upgraded, upgraded_connect) =
+            accept_node_connect(&listener, "nonce-v4-again", 1_700_000_000_789).await;
+        assert_current_connect(&upgraded_connect, "nonce-v4-again");
+        send_json(
+            &mut upgraded,
+            json!({
+                "type":"res", "id":upgraded_connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+    });
+
+    let connect = || {
+        NodeClient::connect(
+            NodeClientConfig::new(format!("ws://{address}")),
+            |_challenge| async move {
+                Ok::<_, std::io::Error>(
+                    NodeConnectOptions::new("test", "macos")
+                        .device_family("Mac")
+                        .command("example.status")
+                        .activate()
+                        .identity(openclaw_node_host::NodeIdentity::from_secret_bytes([7; 32])),
+                )
+            },
+        )
+    };
+    let legacy = connect().await.unwrap();
+    assert_eq!(legacy.protocol(), NodeProtocolVersion::V3);
+    assert_eq!(
+        legacy.next_invocation().await.unwrap().params,
+        json!({"verbose":true})
+    );
+    legacy.close().await;
+
+    let current = connect().await.unwrap();
+    assert_eq!(current.protocol(), NodeProtocolVersion::V4);
+    current.close().await;
     server.await.unwrap();
 }
 
@@ -119,15 +218,19 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
     let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |challenge| async move {
-            let options = connect_runtime.activate(
-                NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
-            );
-            let request = options.external_signing_request(public_key, &challenge)?;
-            let signature = signing_key.sign(request.payload().as_bytes());
-            Ok::<_, openclaw_node_host::IdentityError>(
-                options.device(request.finish(signature.to_bytes())?),
-            )
+        move |challenge| {
+            let connect_runtime = connect_runtime.clone();
+            let signing_key = signing_key.clone();
+            async move {
+                let options = connect_runtime.activate(
+                    NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
+                );
+                let request = options.external_signing_request(public_key, &challenge)?;
+                let signature = signing_key.sign(request.payload().as_bytes());
+                Ok::<_, openclaw_node_host::IdentityError>(
+                    options.device(request.finish(signature.to_bytes())?),
+                )
+            }
         },
     )
     .await
@@ -238,15 +341,19 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
     let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |challenge| async move {
-            let options = connect_runtime.activate(
-                NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
-            );
-            let request = options.external_signing_request(public_key, &challenge)?;
-            let signature = signing_key.sign(request.payload().as_bytes());
-            Ok::<_, openclaw_node_host::IdentityError>(
-                options.device(request.finish(signature.to_bytes())?),
-            )
+        move |challenge| {
+            let connect_runtime = connect_runtime.clone();
+            let signing_key = signing_key.clone();
+            async move {
+                let options = connect_runtime.activate(
+                    NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
+                );
+                let request = options.external_signing_request(public_key, &challenge)?;
+                let signature = signing_key.sign(request.payload().as_bytes());
+                Ok::<_, openclaw_node_host::IdentityError>(
+                    options.device(request.finish(signature.to_bytes())?),
+                )
+            }
         },
     )
     .await
@@ -458,6 +565,45 @@ where
         .send(Message::Text(value.to_string().into()))
         .await
         .unwrap();
+}
+
+async fn accept_node_connect(
+    listener: &TcpListener,
+    nonce: &str,
+    timestamp: u64,
+) -> (
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    Value,
+) {
+    let (tcp, _) = listener.accept().await.unwrap();
+    let mut socket = accept_async(tcp).await.unwrap();
+    send_json(
+        &mut socket,
+        json!({
+            "type":"event", "event":"connect.challenge",
+            "payload":{"nonce":nonce,"ts":timestamp}
+        }),
+    )
+    .await;
+    let connect = receive_json(&mut socket).await;
+    (socket, connect)
+}
+
+fn assert_current_connect(connect: &Value, nonce: &str) {
+    assert_eq!(connect["params"]["minProtocol"], 4);
+    assert_eq!(connect["params"]["maxProtocol"], 4);
+    assert_eq!(connect["params"]["client"]["platform"], "macos");
+    assert_eq!(connect["params"]["client"]["deviceFamily"], "Mac");
+    assert_eq!(connect["params"]["device"]["nonce"], nonce);
+}
+
+fn assert_legacy_connect(connect: &Value, nonce: &str) {
+    assert_eq!(connect["params"]["minProtocol"], 3);
+    assert_eq!(connect["params"]["maxProtocol"], 3);
+    assert_eq!(connect["params"]["client"]["platform"], "darwin");
+    assert!(connect["params"]["client"].get("deviceFamily").is_none());
+    assert!(connect["params"]["client"].get("modelIdentifier").is_none());
+    assert_eq!(connect["params"]["device"]["nonce"], nonce);
 }
 
 async fn receive_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Value

@@ -3,8 +3,8 @@
 mod session;
 
 pub use session::{
-    ClientError, ConnectChallenge, DispatchRejection, Event, EventSubscription, GatewayClient,
-    GatewayClientConfig, GatewaySession,
+    ClientError, ConnectAttempt, ConnectChallenge, DispatchRejection, Event, EventSubscription,
+    GatewayClient, GatewayClientConfig, GatewaySession,
 };
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};

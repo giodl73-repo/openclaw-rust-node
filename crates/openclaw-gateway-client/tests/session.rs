@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use openclaw_gateway_client::{
-    ClientError, DispatchRejection, Event, GatewayClient, GatewayClientConfig,
+    ClientError, ConnectAttempt, DispatchRejection, Event, GatewayClient, GatewayClientConfig,
 };
 use serde_json::{json, Value};
 use std::{io, time::Duration};
@@ -148,6 +148,178 @@ async fn dispatch_guard_rejects_before_wire_without_closing_the_session() {
             .unwrap(),
         json!({"ok":true})
     );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn protocol_fallback_reconnects_once_with_a_fresh_challenge() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (nonce, expected_attempt) in [("nonce-v4", "current"), ("nonce-v3", "fallback")] {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"event", "event":"connect.challenge",
+                    "payload":{"nonce":nonce,"ts":1_700_000_000_123_u64}
+                }),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            assert_eq!(connect["params"]["attempt"], expected_attempt);
+            if expected_attempt == "current" {
+                send_json(
+                    &mut socket,
+                    json!({
+                        "type":"res", "id":connect["id"], "ok":false,
+                        "error":{
+                            "code":"INVALID_REQUEST",
+                            "message":"protocol mismatch",
+                            "details":{"code":"PROTOCOL_MISMATCH","expectedProtocol":3}
+                        }
+                    }),
+                )
+                .await;
+            } else {
+                send_json(
+                    &mut socket,
+                    json!({
+                        "type":"res", "id":connect["id"], "ok":true,
+                        "payload":{"type":"hello-ok","protocol":3}
+                    }),
+                )
+                .await;
+            }
+        }
+    });
+
+    let session = GatewayClient::connect_with_protocol_fallback(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        3,
+        |challenge, attempt| async move {
+            let attempt = match attempt {
+                ConnectAttempt::Current => "current",
+                ConnectAttempt::ProtocolFallback {
+                    expected_protocol: 3,
+                } => "fallback",
+                other => panic!("unexpected attempt: {other:?}"),
+            };
+            Ok::<_, io::Error>(json!({"attempt":attempt,"nonce":challenge.nonce}))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(session.hello()["protocol"], 3);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn protocol_fallback_does_not_retry_unstructured_or_unrelated_errors() {
+    for details in [
+        json!({"code":"PROTOCOL_MISMATCH"}),
+        json!({"code":"AUTH_TOKEN_MISMATCH","expectedProtocol":3}),
+        json!({"code":"PROTOCOL_MISMATCH","expectedProtocol":4}),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"event", "event":"connect.challenge",
+                    "payload":{"nonce":"nonce-no-retry","ts":1_700_000_000_123_u64}
+                }),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"res", "id":connect["id"], "ok":false,
+                    "error":{"code":"INVALID_REQUEST","message":"rejected","details":details}
+                }),
+            )
+            .await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err(),
+                "unexpected fallback connection"
+            );
+        });
+
+        let result = GatewayClient::connect_with_protocol_fallback(
+            GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+            3,
+            |_, _| async { Ok::<_, io::Error>(json!({})) },
+        )
+        .await;
+        assert!(matches!(result, Err(ClientError::Gateway { .. })));
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn protocol_mismatch_after_fallback_is_terminal() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (attempt, expected_protocol) in [(1, 3), (2, 4)] {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"event", "event":"connect.challenge",
+                    "payload":{
+                        "nonce":format!("nonce-{attempt}"),
+                        "ts":1_700_000_000_123_u64
+                    }
+                }),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"res", "id":connect["id"], "ok":false,
+                    "error":{
+                        "code":"INVALID_REQUEST",
+                        "message":"protocol mismatch",
+                        "details":{
+                            "code":"PROTOCOL_MISMATCH",
+                            "expectedProtocol":expected_protocol
+                        }
+                    }
+                }),
+            )
+            .await;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err(),
+            "protocol fallback must not loop"
+        );
+    });
+
+    let result = GatewayClient::connect_with_protocol_fallback(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        3,
+        |_, _| async { Ok::<_, io::Error>(json!({})) },
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(ClientError::Gateway {
+            details: Some(details),
+            ..
+        }) if details["expectedProtocol"] == 4
+    ));
     server.await.unwrap();
 }
 
