@@ -399,9 +399,10 @@ impl GatewayClient {
     /// Connect with one bounded fallback for a structured protocol mismatch.
     ///
     /// A fallback is attempted only when the first `connect` response contains
-    /// `details.code = "PROTOCOL_MISMATCH"` and the requested
-    /// `details.expectedProtocol`. The replacement connection obtains a fresh
-    /// challenge and invokes `make_params` again.
+    /// the requested `details.expectedProtocol` and either
+    /// `details.code = "PROTOCOL_MISMATCH"` or a normalized protocol-mismatch
+    /// message. The replacement connection obtains a fresh challenge and
+    /// invokes `make_params` again.
     pub async fn connect_with_protocol_fallback<F, Fut, E>(
         config: GatewayClientConfig,
         expected_protocol: u32,
@@ -433,7 +434,10 @@ impl GatewayClient {
 
 fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) -> bool {
     let ClientError::Gateway {
-        method, details, ..
+        method,
+        message,
+        details,
+        ..
     } = error
     else {
         return false;
@@ -444,9 +448,11 @@ fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) ->
     let Some(details) = details.as_ref() else {
         return false;
     };
-    details.get("code").and_then(Value::as_str) == Some("PROTOCOL_MISMATCH")
-        && details.get("expectedProtocol").and_then(Value::as_u64)
-            == Some(u64::from(expected_protocol))
+    let matches_expected_protocol = details.get("expectedProtocol").and_then(Value::as_u64)
+        == Some(u64::from(expected_protocol));
+    let matches_mismatch = details.get("code").and_then(Value::as_str) == Some("PROTOCOL_MISMATCH")
+        || message.trim().to_lowercase().contains("protocol mismatch");
+    matches_expected_protocol && matches_mismatch
 }
 
 async fn connect_once<F, Fut, E>(
@@ -1291,6 +1297,37 @@ mod tests {
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Pending
         }
+    }
+
+    #[test]
+    fn protocol_fallback_matches_structured_code_or_normalized_message() {
+        let error = |message: &str, details: Value| ClientError::Gateway {
+            method: "connect".into(),
+            code: "INVALID_REQUEST".into(),
+            message: message.into(),
+            details: Some(details),
+            retryable: None,
+            retry_after_ms: None,
+        };
+
+        assert!(is_expected_protocol_mismatch(
+            &error(
+                "rejected",
+                json!({"code":"PROTOCOL_MISMATCH","expectedProtocol":3})
+            ),
+            3
+        ));
+        assert!(is_expected_protocol_mismatch(
+            &error(
+                "  Protocol Mismatch: expected v3  ",
+                json!({"expectedProtocol":3})
+            ),
+            3
+        ));
+        assert!(!is_expected_protocol_mismatch(
+            &error("protocol mismatch", json!({"expectedProtocol":4})),
+            3
+        ));
     }
 
     #[test]

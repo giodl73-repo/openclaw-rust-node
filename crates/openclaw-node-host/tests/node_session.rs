@@ -112,7 +112,7 @@ async fn node_protocol_fallback_uses_fresh_legacy_connect_material_and_recovers_
                 "error":{
                     "code":"INVALID_REQUEST",
                     "message":"protocol mismatch",
-                    "details":{"code":"PROTOCOL_MISMATCH","expectedProtocol":3}
+                    "details":{"expectedProtocol":3}
                 }
             }),
         )
@@ -141,7 +141,7 @@ async fn node_protocol_fallback_uses_fresh_legacy_connect_material_and_recovers_
                     "id":"invoke-v3",
                     "nodeId":"node-1",
                     "command":"example.status",
-                    "params":{"verbose":true}
+                    "paramsJSON":"{\"verbose\":true}"
                 }
             }),
         )

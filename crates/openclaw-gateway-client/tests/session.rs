@@ -216,11 +216,77 @@ async fn protocol_fallback_reconnects_once_with_a_fresh_challenge() {
 }
 
 #[tokio::test]
+async fn protocol_fallback_accepts_released_v3_mismatch_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (nonce, fallback) in [("nonce-v4", false), ("nonce-v3", true)] {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"event", "event":"connect.challenge",
+                    "payload":{"nonce":nonce,"ts":1_700_000_000_123_u64}
+                }),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            if fallback {
+                send_json(
+                    &mut socket,
+                    json!({
+                        "type":"res", "id":connect["id"], "ok":true,
+                        "payload":{"type":"hello-ok","protocol":3}
+                    }),
+                )
+                .await;
+            } else {
+                send_json(
+                    &mut socket,
+                    json!({
+                        "type":"res", "id":connect["id"], "ok":false,
+                        "error":{
+                            "code":"INVALID_REQUEST",
+                            "message":"protocol mismatch",
+                            "details":{"expectedProtocol":3}
+                        }
+                    }),
+                )
+                .await;
+            }
+        }
+    });
+
+    let session = GatewayClient::connect_with_protocol_fallback(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        3,
+        |challenge, attempt| async move {
+            Ok::<_, io::Error>(json!({
+                "nonce":challenge.nonce,
+                "fallback":matches!(attempt, ConnectAttempt::ProtocolFallback { .. })
+            }))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(session.hello()["protocol"], 3);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn protocol_fallback_does_not_retry_unstructured_or_unrelated_errors() {
-    for details in [
-        json!({"code":"PROTOCOL_MISMATCH"}),
-        json!({"code":"AUTH_TOKEN_MISMATCH","expectedProtocol":3}),
-        json!({"code":"PROTOCOL_MISMATCH","expectedProtocol":4}),
+    for (message, details) in [
+        ("rejected", json!({"code":"PROTOCOL_MISMATCH"})),
+        (
+            "rejected",
+            json!({"code":"AUTH_TOKEN_MISMATCH","expectedProtocol":3}),
+        ),
+        (
+            "protocol mismatch",
+            json!({"code":"PROTOCOL_MISMATCH","expectedProtocol":4}),
+        ),
+        ("unrelated rejection", json!({"expectedProtocol":3})),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -240,7 +306,7 @@ async fn protocol_fallback_does_not_retry_unstructured_or_unrelated_errors() {
                 &mut socket,
                 json!({
                     "type":"res", "id":connect["id"], "ok":false,
-                    "error":{"code":"INVALID_REQUEST","message":"rejected","details":details}
+                    "error":{"code":"INVALID_REQUEST","message":message,"details":details}
                 }),
             )
             .await;
