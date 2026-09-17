@@ -2117,18 +2117,46 @@ mod tests {
 
     #[test]
     fn configuration_rejects_unknown_fields_instead_of_ignoring_secrets() {
-        let mut value = serde_json::to_value(configuration()).unwrap();
-        value["token"] = json!("must-not-be-ignored");
-        assert!(serde_json::from_value::<SidecarRuntimeConfiguration>(value).is_err());
+        for field in [
+            "auth",
+            "credential",
+            "deviceToken",
+            "endpoint",
+            "headers",
+            "signature",
+            "token",
+        ] {
+            let mut value = serde_json::to_value(configuration()).unwrap();
+            value[field] = json!("must-not-be-ignored");
+            assert!(
+                serde_json::from_value::<SidecarRuntimeConfiguration>(value).is_err(),
+                "accepted forbidden configuration field {field}"
+            );
+        }
     }
 
     #[test]
-    fn lifecycle_events_project_stable_secret_free_status() {
+    fn lifecycle_events_keep_attempt_and_manifest_generations_distinct() {
         let (mut exchange, mut channel, _configuration) =
             validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
         let mut bridge =
             SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
+        bridge.observe_lifecycle(&LifecycleEvent::Connected {
+            attempt: 2,
+            protocol: Some(3),
+            server_version: Some("current-gateway".into()),
+        });
+        assert_eq!(
+            bridge.status(),
+            &SidecarRuntimeStatus {
+                state: SidecarRuntimeState::Connecting,
+                manifest_generation: 3,
+                runtime_version: "1.0.0".into(),
+                attempt: 2,
+                reason: None,
+            }
+        );
         bridge.observe_lifecycle(&LifecycleEvent::Ready { attempt: 2 });
         assert_eq!(
             bridge.status(),
