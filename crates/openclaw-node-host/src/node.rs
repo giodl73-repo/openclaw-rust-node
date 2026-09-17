@@ -1,7 +1,8 @@
 use openclaw_gateway_client::{
-    ClientError as GatewayClientError, GatewayClient, GatewayClientConfig, GatewaySession, TlsTrust,
+    ClientError as GatewayClientError, ConnectAttempt as GatewayConnectAttempt, GatewayClient,
+    GatewayClientConfig, GatewaySession, TlsTrust,
 };
-pub use openclaw_gateway_client::{ConnectChallenge, Event, EventSubscription};
+pub use openclaw_gateway_client::{Event, EventSubscription};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -23,6 +24,32 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
+/// Node wire dialect selected for one Gateway session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeProtocolVersion {
+    /// Released legacy node envelope with direct invocation `params`.
+    V3,
+    /// Current node envelope with serialized invocation `paramsJSON`.
+    V4,
+}
+
+impl NodeProtocolVersion {
+    const fn number(self) -> u32 {
+        match self {
+            Self::V3 => MINIMUM_NODE_PROTOCOL_VERSION,
+            Self::V4 => PROTOCOL_VERSION,
+        }
+    }
+}
+
+/// Fresh Gateway challenge plus the exact node protocol envelope to sign.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectChallenge {
+    pub nonce: String,
+    pub issued_at_ms: u64,
+    pub protocol: NodeProtocolVersion,
+}
 
 #[derive(Clone, Debug)]
 pub struct NodeClientConfig {
@@ -363,11 +390,12 @@ impl NodeConnectOptions {
         public_key: [u8; 32],
         challenge: &ConnectChallenge,
     ) -> Result<DeviceSigningRequest, IdentityError> {
+        let (platform, device_family) = self.identity_metadata(challenge.protocol);
         DeviceSigningRequest::new(
             public_key,
             &challenge.nonce,
-            &self.client.platform,
-            self.client.device_family.as_deref(),
+            &platform,
+            device_family.as_deref(),
             self.auth.as_ref().and_then(ConnectAuth::signature_token),
             challenge.issued_at_ms,
         )
@@ -391,6 +419,27 @@ impl NodeConnectOptions {
         self
     }
 
+    fn for_protocol(mut self, protocol: NodeProtocolVersion) -> Self {
+        self.min_protocol = protocol.number();
+        self.max_protocol = protocol.number();
+        if protocol == NodeProtocolVersion::V3 {
+            self.client.platform = legacy_node_platform(&self.client.platform);
+            self.client.device_family = None;
+        }
+        self
+    }
+
+    fn identity_metadata(&self, protocol: NodeProtocolVersion) -> (String, Option<String>) {
+        if protocol == NodeProtocolVersion::V3 {
+            (legacy_node_platform(&self.client.platform), None)
+        } else {
+            (
+                self.client.platform.clone(),
+                self.client.device_family.clone(),
+            )
+        }
+    }
+
     fn finalize_identity(mut self, nonce: &str, issued_at_ms: u64) -> Result<Self, IdentityError> {
         if self.activated {
             self.advertised_caps.clone_from(&self.declared_caps);
@@ -409,6 +458,14 @@ impl NodeConnectOptions {
             issued_at_ms,
         )?);
         Ok(self)
+    }
+}
+
+fn legacy_node_platform(platform: &str) -> String {
+    match platform {
+        "macos" => "darwin".to_string(),
+        "windows" => "win32".to_string(),
+        _ => platform.to_string(),
     }
 }
 
@@ -571,7 +628,7 @@ impl NodeClient {
         make_options: F,
     ) -> Result<NodeSession, ClientError>
     where
-        F: FnOnce(ConnectChallenge) -> Fut,
+        F: FnMut(ConnectChallenge) -> Fut,
         Fut: Future<Output = Result<NodeConnectOptions, E>>,
         E: Error + Send + Sync + 'static,
     {
@@ -591,34 +648,68 @@ impl NodeClient {
                 .header(&name, &value)
                 .map_err(map_gateway_error)?;
         }
-        let connection_surface = Arc::new(Mutex::new((false, BTreeSet::new())));
+        let connection_surface = Arc::new(Mutex::new((
+            false,
+            BTreeSet::new(),
+            NodeProtocolVersion::V4,
+        )));
         let surface_for_connect = Arc::clone(&connection_surface);
-        let gateway = GatewayClient::connect(gateway_config, move |challenge| async move {
-            let options = make_options(challenge.clone())
-                .await
-                .map_err(|error| ConnectOptionsError(error.to_string()))?;
-            let options = options
-                .finalize_identity(&challenge.nonce, challenge.issued_at_ms)
-                .map_err(|error| ConnectOptionsError(error.to_string()))?;
-            *surface_for_connect
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = (
-                options.activated,
-                options.advertised_commands.iter().cloned().collect(),
-            );
-            serde_json::to_value(options).map_err(|error| ConnectOptionsError(error.to_string()))
-        })
+        let mut make_options = make_options;
+        let gateway = GatewayClient::connect_with_protocol_fallback(
+            gateway_config,
+            MINIMUM_NODE_PROTOCOL_VERSION,
+            move |challenge, attempt| {
+                let protocol = match attempt {
+                    GatewayConnectAttempt::Current => NodeProtocolVersion::V4,
+                    GatewayConnectAttempt::ProtocolFallback { expected_protocol } => {
+                        debug_assert_eq!(expected_protocol, MINIMUM_NODE_PROTOCOL_VERSION);
+                        NodeProtocolVersion::V3
+                    }
+                };
+                let challenge = ConnectChallenge {
+                    nonce: challenge.nonce,
+                    issued_at_ms: challenge.issued_at_ms,
+                    protocol,
+                };
+                let options = make_options(challenge.clone());
+                let surface_for_connect = Arc::clone(&surface_for_connect);
+                async move {
+                    let options = options
+                        .await
+                        .map_err(|error| ConnectOptionsError(error.to_string()))?
+                        .for_protocol(protocol);
+                    let options = options
+                        .finalize_identity(&challenge.nonce, challenge.issued_at_ms)
+                        .map_err(|error| ConnectOptionsError(error.to_string()))?;
+                    *surface_for_connect
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = (
+                        options.activated,
+                        options.advertised_commands.iter().cloned().collect(),
+                        protocol,
+                    );
+                    serde_json::to_value(options)
+                        .map_err(|error| ConnectOptionsError(error.to_string()))
+                }
+            },
+        )
         .await
         .map_err(map_gateway_error)?;
 
-        let (activated, advertised_commands) = connection_surface
+        let (activated, advertised_commands, protocol) = connection_surface
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        if gateway.hello()["protocol"].as_u64() != Some(u64::from(protocol.number())) {
+            return Err(ClientError::InvalidFrame(
+                "Gateway hello protocol did not match the node connect envelope".into(),
+            ));
+        }
         Ok(NodeSession {
             gateway,
             activated,
             advertised_commands: Arc::new(advertised_commands),
+            protocol,
             runtime_marker: Arc::new(()),
         })
     }
@@ -633,6 +724,7 @@ pub struct NodeSession {
     gateway: GatewaySession,
     activated: bool,
     advertised_commands: Arc<BTreeSet<String>>,
+    protocol: NodeProtocolVersion,
     runtime_marker: Arc<()>,
 }
 
@@ -656,6 +748,12 @@ impl NodeSession {
     #[must_use]
     pub fn is_activated(&self) -> bool {
         self.activated
+    }
+
+    #[must_use]
+    /// Return the exact node wire dialect negotiated for this session.
+    pub fn protocol(&self) -> NodeProtocolVersion {
+        self.protocol
     }
 
     /// Return the issued device token from `hello-ok`, when the Gateway supplied
@@ -757,6 +855,16 @@ impl NodeSession {
         self.gateway.close().await;
     }
 
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.gateway.is_closed()
+    }
+
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.gateway.is_retired()
+    }
+
     /// Wait until the Gateway transport closes.
     /// # Errors
     ///
@@ -818,6 +926,9 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
             retry_after_ms,
         },
         GatewayClientError::RequestTimeout(method) => ClientError::RequestTimeout(method),
+        GatewayClientError::DispatchRejected(_) => {
+            unreachable!("node client only issues unguarded Gateway requests")
+        }
         GatewayClientError::WriteTimeout(operation) => ClientError::WriteTimeout(operation),
         GatewayClientError::Closed(error) => ClientError::Closed(error),
         GatewayClientError::InvalidFrame(error) => ClientError::InvalidFrame(error),
@@ -871,6 +982,43 @@ fn parse_invocation_cancel(payload: Value) -> Result<NodeSessionEvent, ClientErr
 }
 
 fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocation, ClientError> {
+    let payload = decode_invocation(payload)?;
+    let id = require_non_empty_result_field("invocation id", payload.id)?;
+    let node_id = require_non_empty_result_field("invocation node id", payload.node_id)?;
+    let command = require_non_empty_result_field("invocation command", payload.command)?;
+    let idempotency_key = payload
+        .idempotency_key
+        .map(|value| require_non_empty_result_field("invocation idempotency key", value))
+        .transpose()?;
+    let session_key = payload
+        .session_key
+        .map(|value| require_non_empty_result_field("invocation session key", value))
+        .transpose()?;
+    Ok(NodeInvocation {
+        id,
+        node_id,
+        command,
+        params: payload.params,
+        timeout_ms: payload.timeout_ms,
+        idempotency_key,
+        session_key,
+        received_params_bytes: payload.received_params_bytes,
+        received_at: Some(received_at),
+    })
+}
+
+struct DecodedInvocation {
+    id: String,
+    node_id: String,
+    command: String,
+    params: Value,
+    received_params_bytes: Option<usize>,
+    timeout_ms: Option<u64>,
+    idempotency_key: Option<String>,
+    session_key: Option<String>,
+}
+
+fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     #[serde(rename_all = "camelCase")]
@@ -895,17 +1043,6 @@ fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocati
     let payload: Payload = serde_json::from_value(payload).map_err(|error| {
         ClientError::InvalidFrame(format!("invalid node.invoke.request: {error}"))
     })?;
-    let id = require_non_empty_result_field("invocation id", payload.id)?;
-    let node_id = require_non_empty_result_field("invocation node id", payload.node_id)?;
-    let command = require_non_empty_result_field("invocation command", payload.command)?;
-    let idempotency_key = payload
-        .idempotency_key
-        .map(|value| require_non_empty_result_field("invocation idempotency key", value))
-        .transpose()?;
-    let session_key = payload
-        .session_key
-        .map(|value| require_non_empty_result_field("invocation session key", value))
-        .transpose()?;
     let (params, received_params_bytes) = match payload.params_json {
         Some(value) => {
             let received_params_bytes = value.len();
@@ -916,16 +1053,15 @@ fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocati
         }
         None => (Value::Null, Some(0)),
     };
-    Ok(NodeInvocation {
-        id,
-        node_id,
-        command,
+    Ok(DecodedInvocation {
+        id: payload.id,
+        node_id: payload.node_id,
+        command: payload.command,
         params,
-        timeout_ms: payload.timeout_ms,
-        idempotency_key,
-        session_key,
         received_params_bytes,
-        received_at: Some(received_at),
+        timeout_ms: payload.timeout_ms,
+        idempotency_key: payload.idempotency_key,
+        session_key: payload.session_key,
     })
 }
 
@@ -980,7 +1116,7 @@ mod tests {
         assert_eq!(invocation.timeout_ms, Some(0));
         assert_eq!(invocation.idempotency_key.as_deref(), Some("idem-1"));
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
-        assert!(parse_invocation(fixture["request"]["invalid"].clone(), Instant::now()).is_err());
+        assert!(parse_invocation(fixture["request"]["invalid"].clone(), Instant::now(),).is_err());
 
         let inputs = fixture["input"]["canonical"]
             .as_array()
@@ -1050,6 +1186,7 @@ mod tests {
                 &ConnectChallenge {
                     nonce: "nonce-1".into(),
                     issued_at_ms: 1_700_000_000_000,
+                    protocol: NodeProtocolVersion::V4,
                 },
             )
             .expect("external signing request");
@@ -1079,6 +1216,38 @@ mod tests {
         assert_eq!(invocation.params, Value::Null);
         assert_eq!(invocation.input_bytes(), Some(0));
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+    }
+
+    #[test]
+    fn invocation_params_json_is_strict_across_protocol_versions() {
+        let released = json!({
+            "id": "invoke-1",
+            "nodeId": "node-1",
+            "command": "example.status",
+            "paramsJSON": "{\"verbose\":true}"
+        });
+        let unsupported_direct_params = json!({
+            "id": "invoke-unsupported",
+            "nodeId": "node-1",
+            "command": "example.status",
+            "params": {"verbose": true}
+        });
+        let ambiguous = json!({
+            "id": "invoke-ambiguous",
+            "nodeId": "node-1",
+            "command": "example.status",
+            "params": {"legacy": true},
+            "paramsJSON": "{\"current\":true}"
+        });
+
+        assert_eq!(
+            parse_invocation(released, Instant::now())
+                .expect("released invocation")
+                .params,
+            json!({"verbose": true})
+        );
+        assert!(parse_invocation(unsupported_direct_params, Instant::now()).is_err());
+        assert!(parse_invocation(ambiguous, Instant::now()).is_err());
     }
 
     #[test]
