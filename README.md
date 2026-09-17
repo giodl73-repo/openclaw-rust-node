@@ -198,9 +198,16 @@ let connect_options = runtime.activate(NodeConnectOptions::new("0.1.0", "linux")
 # }
 ```
 
-Handler cancellation is local in this slice: timeout and disconnect cancel
-the token and stop runtime-owned handler tasks. Wire cancellation and streaming
-input/progress remain gated on their separately published lifecycle contracts.
+`NodeLifecycle` reacquires platform-owned endpoint, authentication, challenge
+signing, and connect metadata before every attempt. It delivers newly issued
+Gateway credentials as an owned `IssuedDeviceToken`, tagged with the attempt
+that produced it and redacted from `Debug`, so the platform can persist the
+secret without passing it through lifecycle status.
+
+Timeout, disconnect, and `node.invoke.cancel` cancel runtime-owned handler
+tasks, close duplex input, reject later progress, and remove active invocation
+state. Streaming input and progress use bounded channels and remain scoped to
+the connection manifest that admitted the invocation.
 
 `ReconnectPolicy` converts connection failures into explicit reusable actions:
 
@@ -228,8 +235,10 @@ and records its actual node-facing coverage in
 [`protocol/node-contract.json`](protocol/node-contract.json).
 
 The typed dispatch primitive remains usable directly by embeddings that want
-to own runtime policy themselves. The next lifecycle layer is streaming input,
-progress, and wire cancellation only after its OpenClaw contracts are released.
+to own runtime policy themselves. Gateway declaration approval, committed-policy
+reconciliation, and pairing-generation leases remain Gateway-owned; the Rust
+runtime applies an additional fail-closed local admission check only after the
+Gateway delivers an invocable command.
 
 ## Experimental headless host
 

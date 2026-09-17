@@ -71,7 +71,14 @@ async fn lifecycle_reacquires_each_attempt_delivers_token_and_stops_cleanly() {
             }
             observed.lock().unwrap().push(event);
         },
-        move |issued| *observed_token.lock().unwrap() = Some(issued.to_owned()),
+        move |issued| {
+            assert_eq!(issued.attempt(), 2);
+            assert_eq!(
+                format!("{issued:?}"),
+                "IssuedDeviceToken { attempt: 2, token: \"[REDACTED]\" }"
+            );
+            *observed_token.lock().unwrap() = Some(issued.into_secret());
+        },
         async move {
             let _ = stop_rx.await;
         },

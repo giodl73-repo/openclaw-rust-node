@@ -23,9 +23,10 @@ use tokio::{
 };
 
 use crate::{
-    ClientError, ClientErrorClass, CommandRuntime, ConnectAuth, LifecycleDisconnectReason,
-    LifecycleError, LifecycleEvent, NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity,
-    NodeLifecycle, NodeSession, ReconnectPause, RuntimeBuildError, RuntimeErrorClass,
+    ClientError, ClientErrorClass, CommandRuntime, ConnectAuth, IssuedDeviceToken,
+    LifecycleDisconnectReason, LifecycleError, LifecycleEvent, NodeClient, NodeClientConfig,
+    NodeConnectOptions, NodeIdentity, NodeLifecycle, NodeSession, ReconnectPause,
+    RuntimeBuildError, RuntimeErrorClass,
 };
 
 // Avoid OpenClaw's reserved Gateway-adjacent ports by asking the OS for a free
@@ -471,7 +472,9 @@ fn emit_backoff(delay: Duration, reason: LifecycleDisconnectReason) {
     }
 }
 
-fn host_token_handler(issued_device_token: Arc<Mutex<Option<String>>>) -> impl FnMut(&str) + Send {
+fn host_token_handler(
+    issued_device_token: Arc<Mutex<Option<String>>>,
+) -> impl FnMut(IssuedDeviceToken) + Send {
     move |device_token| {
         let Ok(mut current) = issued_device_token.lock() else {
             emit(
@@ -481,7 +484,7 @@ fn host_token_handler(issued_device_token: Arc<Mutex<Option<String>>>) -> impl F
             );
             return;
         };
-        *current = Some(device_token.to_owned());
+        *current = Some(device_token.into_secret());
         emit(
             "info",
             "gateway.device_token_adopted",

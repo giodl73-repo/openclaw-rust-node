@@ -22,8 +22,8 @@ pub use duplex::InvocationIo;
 pub use host::{run_host, AuthKind, HostConfig, HostCredentials, HostError};
 pub use identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 pub use lifecycle::{
-    ClientErrorClass, LifecycleDisconnectReason, LifecycleError, LifecycleEvent, NodeLifecycle,
-    RuntimeErrorClass,
+    ClientErrorClass, IssuedDeviceToken, LifecycleDisconnectReason, LifecycleError, LifecycleEvent,
+    NodeLifecycle, RuntimeErrorClass,
 };
 pub use node::{
     ClientError, ConnectAuth, ConnectChallenge, DeviceProof, Event, EventSubscription,

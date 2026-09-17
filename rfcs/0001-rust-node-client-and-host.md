@@ -317,11 +317,18 @@ explicit operator-controlled `gateway.nodes.allowCommands` entry, and they
 still pass the separate node-capability approval flow. Local activation does
 not weaken or replace either Gateway gate.
 
+Declaration approval, committed-policy reconciliation, and pairing-generation
+leases remain Gateway-owned. Policy revocation or generation retirement can
+cancel already accepted work without replacing the physical connection; Rust
+owns fail-closed local admission and cleanup after the Gateway delivers an
+invocation.
+
 The initial runtime has a zero-length handler queue: work starts under a
 concurrency permit or receives an immediate structured overload result. This
 keeps memory bounded and avoids accepting work whose deadline is already being
-consumed in an application-side queue. Timeout and disconnect cancellation are
-local cooperative signals in R5; wire cancellation remains R6.
+consumed in an application-side queue. Timeout, disconnect, and
+`node.invoke.cancel` close duplex input and cooperatively cancel runtime-owned
+handler work.
 Result delivery is bounded separately. If Gateway acknowledgements stop and
 the critical result buffer saturates, the runtime fails the session closed
 rather than silently dropping results or accumulating unbounded tasks.
@@ -402,6 +409,8 @@ ready; do not hold the entire implementation in one long stack.
 
 Tracking: [openclaw/openclaw#115375](https://github.com/openclaw/openclaw/issues/115375)
 
+Status: satisfied by the current OpenClaw contract consumed by this crate.
+
 Scope:
 
 - publish the `node.invoke.cancel` payload schema and type;
@@ -412,8 +421,8 @@ Scope:
 Exit gate:
 
 - the contract ships in an immutable OpenClaw release artifact;
-- Rust does not implement wire cancellation or claim its conformance before
-  that release.
+- Rust implements wire cancellation only against that released contract and
+  shared language-neutral fixtures.
 
 ### Rust R0: RFC, ownership, and evidence gates
 
@@ -517,7 +526,8 @@ Exit gate:
 
 Scope:
 
-- ordered input, bounded progress, and wire cancellation after U1 ships;
+- ordered input, bounded progress, and wire cancellation against the released
+  U1 contract;
 - late, duplicate, and out-of-order frame handling plus cancellation races.
 
 Exit gate:

@@ -102,6 +102,47 @@ pub enum LifecycleError {
     Paused(ReconnectPause),
 }
 
+/// Gateway-issued credential handed to the platform persistence owner.
+#[derive(PartialEq, Eq)]
+pub struct IssuedDeviceToken {
+    attempt: u64,
+    token: String,
+}
+
+impl IssuedDeviceToken {
+    fn new(attempt: u64, token: impl Into<String>) -> Self {
+        Self {
+            attempt,
+            token: token.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> u64 {
+        self.attempt
+    }
+
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.token
+    }
+
+    #[must_use]
+    pub fn into_secret(self) -> String {
+        self.token
+    }
+}
+
+impl std::fmt::Debug for IssuedDeviceToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuedDeviceToken")
+            .field("attempt", &self.attempt)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// Canonical node connection, reconnect, runtime, and shutdown driver.
 ///
 /// The connection factory is invoked before every attempt. Native embedders can
@@ -171,7 +212,7 @@ impl NodeLifecycle {
         C: FnMut() -> ConnectFuture + Send,
         ConnectFuture: Future<Output = Result<NodeSession, ClientError>> + Send,
         O: FnMut(LifecycleEvent) + Send,
-        T: FnMut(&str) + Send,
+        T: FnMut(IssuedDeviceToken) + Send,
         S: Future<Output = ()> + Send,
     {
         let mut shutdown = Box::pin(shutdown);
@@ -203,7 +244,7 @@ impl NodeLifecycle {
             self.reconnect.connected();
             on_event(connected_event(attempt, &session));
             if let Some(device_token) = session.issued_device_token() {
-                on_issued_device_token(device_token);
+                on_issued_device_token(IssuedDeviceToken::new(attempt, device_token));
             }
             on_event(LifecycleEvent::Ready { attempt });
 
